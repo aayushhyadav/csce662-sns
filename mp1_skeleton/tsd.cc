@@ -114,6 +114,21 @@ class SNSServiceImpl final : public SNSService::Service {
     /*********
     YOUR CODE HERE
     **********/
+
+    if (client_db.size() > 0) {
+      for (Client* existingClient: client_db) {
+        if (existingClient->username == request->username()) {
+          reply->set_msg("User already exists!");
+          return Status::OK;
+        }
+      } 
+    }
+
+    Client* newClient = new Client();
+    newClient->username = request->username();
+    
+    client_db.push_back(newClient);
+    reply->set_msg("Successfully logged in!");
     
     return Status::OK;
   }

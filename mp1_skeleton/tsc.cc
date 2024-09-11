@@ -83,6 +83,14 @@ int Client::connectTo()
     
 ///////////////////////////////////////////////////////////
 // YOUR CODE HERE
+
+    auto channel = grpc::CreateChannel(hostname + ":" + port, grpc::InsecureChannelCredentials());
+    stub_ = SNSService::NewStub(channel);
+
+    IReply ire = Login();
+
+    if (ire.comm_status != SUCCESS) return -1;
+
 //////////////////////////////////////////////////////////
 
     return 1;
@@ -192,9 +200,28 @@ IReply Client::Login() {
     IReply ire;
   
     /***
-     YOUR CODE HERE
+     YOUR CODE HERE 
     ***/
 
+    ClientContext context;
+    Request request;
+    Reply reply;
+
+    request.set_username(username);
+
+    Status status = stub_->Login(&context, request, &reply);
+    
+    if (reply.msg() == "User already exists!") {
+        ire.comm_status = FAILURE_ALREADY_EXISTS;
+
+    } else if (reply.msg().size() != 0) {
+        ire.comm_status = SUCCESS;
+
+    } else {
+      ire.comm_status = FAILURE_NOT_EXISTS;
+    }
+
+    ire.grpc_status = Status::OK;
     return ire;
 }
 
