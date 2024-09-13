@@ -96,6 +96,34 @@ class SNSServiceImpl final : public SNSService::Service {
     /*********
     YOUR CODE HERE
     **********/
+
+    Client* loggedInClient = nullptr;
+    Client* clientToFollow = nullptr;
+
+    for (Client* client: client_db) {
+      if (client->username == request->username()) {
+        loggedInClient = client;
+      }
+      if (client->username == request->arguments(0)) {
+        clientToFollow = client;
+      }
+      if (loggedInClient != nullptr && clientToFollow != nullptr) {
+        break;
+      }
+    }
+
+    if (clientToFollow == nullptr) {
+      reply->set_msg("Command failed with invalid username\n");
+      
+    } else if (clientToFollow == loggedInClient) {
+      reply->set_msg("Input username already exists, command failed\n");
+
+    } else {
+      loggedInClient->client_following.push_back(clientToFollow);
+      clientToFollow->client_followers.push_back(loggedInClient);
+      reply->set_msg("Command completed successfully\n");
+    }
+
     return Status::OK; 
   }
 
@@ -104,6 +132,52 @@ class SNSServiceImpl final : public SNSService::Service {
     /*********
     YOUR CODE HERE
     **********/
+
+    Client* loggedInClient = nullptr;
+    Client* clientToUnFollow = nullptr;
+
+    int curIndex;
+
+    for (Client* client: client_db) {
+      if (client->username == request->username()) {
+        loggedInClient = client;
+      }
+      if (client->username == request->arguments(0)) {
+        clientToUnFollow = client;
+      }
+      if (loggedInClient != nullptr && clientToUnFollow != nullptr) {
+        break;
+      }
+    }
+
+    if (clientToUnFollow == nullptr || loggedInClient == clientToUnFollow) {
+      reply->set_msg("Command failed with invalid username\n");
+
+    } else {
+      curIndex = 0;
+      auto clientFollowingIterator = loggedInClient->client_following.begin();
+      auto clientFollowersIterator = clientToUnFollow->client_followers.begin();
+
+      for (Client* client: loggedInClient->client_following) {
+        if (client == clientToUnFollow) {
+          loggedInClient->client_following.erase(clientFollowingIterator + curIndex);
+          break;
+        }
+        curIndex++;
+      }
+
+      curIndex = 0;
+
+      for (Client* client: clientToUnFollow->client_followers) {
+        if (client == loggedInClient) {
+          clientToUnFollow->client_followers.erase(clientFollowersIterator + curIndex);
+          break;
+        }
+        curIndex++;
+      }
+
+      reply->set_msg("Command completed successfully\n");
+    }
 
     return Status::OK;
   }
@@ -129,7 +203,7 @@ class SNSServiceImpl final : public SNSService::Service {
     
     client_db.push_back(newClient);
     reply->set_msg("Successfully logged in!");
-    
+
     return Status::OK;
   }
 

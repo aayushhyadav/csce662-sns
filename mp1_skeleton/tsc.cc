@@ -149,6 +149,37 @@ IReply Client::processCommand(std::string& input)
     YOUR CODE HERE
     **********/
 
+    std::string delimiter = " ";
+    std::size_t index = input.find_first_of(delimiter);
+
+    ClientContext context;
+    Request request;
+    Reply reply;
+    Status status;
+
+    if (index != std::string::npos) {
+      request.set_username(username);
+      request.add_arguments(input.substr(index + 1, input.size()));
+
+      if (input.substr(0, index) == "FOLLOW") {
+        status = stub_->Follow(&context, request, &reply);
+
+      } else if (input.substr(0, index) == "UNFOLLOW") {
+        status = stub_->UnFollow(&context, request, &reply);
+      }
+
+      if (reply.msg() == "Command failed with invalid username\n") {
+        ire.comm_status = FAILURE_INVALID_USERNAME;
+
+      } else if(reply.msg() == "Input username already exists, command failed\n") {
+        ire.comm_status = FAILURE_ALREADY_EXISTS;
+
+      } else {
+        ire.comm_status = SUCCESS;
+      }
+    }
+
+    ire.grpc_status = Status::OK;
     return ire;
 }
 
