@@ -152,30 +152,12 @@ IReply Client::processCommand(std::string& input)
     std::string delimiter = " ";
     std::size_t index = input.find_first_of(delimiter);
 
-    ClientContext context;
-    Request request;
-    Reply reply;
-    Status status;
-
     if (index != std::string::npos) {
-      request.set_username(username);
-      request.add_arguments(input.substr(index + 1, input.size()));
-
       if (input.substr(0, index) == "FOLLOW") {
-        status = stub_->Follow(&context, request, &reply);
+        ire = Follow(input.substr(index + 1, input.size()));
 
       } else if (input.substr(0, index) == "UNFOLLOW") {
-        status = stub_->UnFollow(&context, request, &reply);
-      }
-
-      if (reply.msg() == "Command failed with invalid username\n") {
-        ire.comm_status = FAILURE_INVALID_USERNAME;
-
-      } else if(reply.msg() == "Input username already exists, command failed\n") {
-        ire.comm_status = FAILURE_ALREADY_EXISTS;
-
-      } else {
-        ire.comm_status = SUCCESS;
+        ire = UnFollow(input.substr(index + 1, input.size()));
       }
 
     } else {
@@ -184,7 +166,6 @@ IReply Client::processCommand(std::string& input)
       }
     }
 
-    ire.grpc_status = Status::OK;
     return ire;
 }
 
@@ -233,6 +214,26 @@ IReply Client::Follow(const std::string& username2) {
     YOUR CODE HERE
     ***/
 
+    ClientContext context;
+    Request request;
+    Reply reply;
+
+    request.set_username(username);
+    request.add_arguments(username2);
+
+    Status status = stub_->Follow(&context, request, &reply);
+
+    if (reply.msg() == "Command failed with invalid username\n") {
+      ire.comm_status = FAILURE_INVALID_USERNAME;
+
+    } else if(reply.msg() == "Input username already exists, command failed\n") {
+      ire.comm_status = FAILURE_ALREADY_EXISTS;
+
+    } else {
+      ire.comm_status = SUCCESS;
+    }
+
+    ire.grpc_status = Status::OK;
     return ire;
 }
 
@@ -245,6 +246,23 @@ IReply Client::UnFollow(const std::string& username2) {
     YOUR CODE HERE
     ***/
 
+    ClientContext context;
+    Request request;
+    Reply reply;
+
+    request.set_username(username);
+    request.add_arguments(username2);
+    
+    Status status = stub_->UnFollow(&context, request, &reply);
+
+    if (reply.msg() == "Command failed with invalid username\n") {
+      ire.comm_status = FAILURE_INVALID_USERNAME;
+
+    }  else {
+      ire.comm_status = SUCCESS;
+    }
+
+    ire.grpc_status = Status::OK;
     return ire;
 }
 
