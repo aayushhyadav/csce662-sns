@@ -88,6 +88,18 @@ class SNSServiceImpl final : public SNSService::Service {
     /*********
     YOUR CODE HERE
     **********/
+
+    Client* logged_in_client;
+
+    for (Client* client: client_db) {
+      if (client->username == request->username()) logged_in_client = client;
+      list_reply->add_all_users(client->username);
+    }
+
+    for (Client* client: logged_in_client->client_followers) {
+      list_reply->add_followers(client->username);
+    }
+
     return Status::OK;
   }
 

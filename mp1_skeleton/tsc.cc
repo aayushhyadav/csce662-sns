@@ -177,6 +177,11 @@ IReply Client::processCommand(std::string& input)
       } else {
         ire.comm_status = SUCCESS;
       }
+
+    } else {
+      if (input == "LIST") {
+        ire = List();
+      }
     }
 
     ire.grpc_status = Status::OK;
@@ -197,6 +202,24 @@ IReply Client::List() {
     /*********
     YOUR CODE HERE
     **********/
+
+    ClientContext context;
+    Request request;
+    ListReply list_reply;
+
+    request.set_username(username);
+    Status status = stub_->List(&context, request, &list_reply);
+
+    for (std::string username: list_reply.all_users()) {
+      ire.all_users.push_back(username);
+    }
+
+    for (std::string username: list_reply.followers()) {
+      ire.followers.push_back(username);
+    }
+
+    ire.comm_status = SUCCESS;
+    ire.grpc_status = Status::OK;
 
     return ire;
 }
