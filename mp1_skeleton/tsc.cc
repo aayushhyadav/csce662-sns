@@ -163,6 +163,10 @@ IReply Client::processCommand(std::string& input)
     } else {
       if (input == "LIST") {
         ire = List();
+
+      } else {
+        ire.comm_status = SUCCESS;
+        ire.grpc_status = Status::OK;
       }
     }
 
@@ -321,6 +325,32 @@ void Client::Timeline(const std::string& username) {
     YOUR CODE HERE
     ***/
 
+    ClientContext context;
+    context.AddMetadata("username", username);
+
+    std::shared_ptr<ClientReaderWriter<Message, Message>> stream(stub_->Timeline(&context));
+
+    std::thread writer([stream, username]() {
+      while (1) {
+        std::string post_message = getPostMessage();
+        stream->Write(MakeMessage(username, post_message));
+      }
+    });
+
+
+    std::thread reader([stream]() {
+      Message incoming_message;
+      while (stream->Read(&incoming_message)) {
+        time_t timestamp_in_seconds = incoming_message.timestamp().seconds();
+        displayPostMessage(incoming_message.username(), incoming_message.msg(), timestamp_in_seconds);
+      }
+    });
+
+    writer.join();
+    reader.join();
+    Status status = stream->Finish();
+    
+    return;
 }
 
 

@@ -81,8 +81,14 @@ struct Client {
 //Vector that stores every client that has been created
 std::vector<Client*> client_db;
 
+//Vector that stores bi-directional stream corresponding to each client
+std::vector<ServerReaderWriter<Message, Message>*> client_writer_streams;
+
 
 class SNSServiceImpl final : public SNSService::Service {
+
+  private:
+    std::mutex mtx;
   
   Status List(ServerContext* context, const Request* request, ListReply* list_reply) override {
     /*********
@@ -226,6 +232,28 @@ class SNSServiceImpl final : public SNSService::Service {
     YOUR CODE HERE
     **********/
     
+    Client* author = 0;
+    Message message;
+
+    auto meta_data = context->client_metadata().find("username");
+
+    mtx.lock();
+    for (Client* client: client_db) {
+      if (meta_data->second == client->username) {
+        client_writer_streams.push_back(stream);
+        author = client;
+        author->stream = client_writer_streams.back();
+        break;
+      }
+    }
+    mtx.unlock();
+
+    while (stream->Read(&message)) {
+      for (Client* follower: author->client_followers) {
+        if (follower->stream != 0) follower->stream->Write(message);
+      }
+    }
+
     return Status::OK;
   }
 
