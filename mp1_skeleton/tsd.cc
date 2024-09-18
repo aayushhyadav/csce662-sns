@@ -89,6 +89,64 @@ class SNSServiceImpl final : public SNSService::Service {
 
   private:
     std::mutex mtx;
+
+    std::string getMessageAsString(Message message) {
+      std::string message_string("T ");
+
+      message_string.append(google::protobuf::util::TimeUtil::ToString(message.timestamp()));
+      message_string.append("\n");
+      message_string.append("U ");
+      message_string.append(message.username());
+      message_string.append("\n");
+      message_string.append("W ");
+      message_string.append(message.msg());
+      message_string.append("\n");
+
+      return message_string;
+    }
+
+    void writeFileContentsToStream(std::string filename, ServerReaderWriter<Message, Message>* stream) {
+      std::ifstream following_file;
+      std::string cur_line;
+      std::vector<std::string> tokens;
+      Message message;
+
+      following_file.open(filename);
+
+      if (following_file.is_open()) {
+        while (getline(following_file, cur_line)) {
+          tokens.push_back(cur_line + "\n");
+        }
+
+        auto token = tokens.rbegin() + 1;
+        std::string token_str;
+        int count = 0;
+
+        while (token != tokens.rend() && count < 20) {
+          token_str = *token;
+
+          if (token_str[0] == 'T') {
+            google::protobuf::Timestamp* timestamp = new google::protobuf::Timestamp();
+            google::protobuf::util::TimeUtil::FromString(token_str.substr(2, token_str.length() - 3), timestamp);
+            message.set_allocated_timestamp(timestamp);
+
+          } else if (token_str[0] == 'U') {
+            message.set_username(token_str.substr(2, token_str.length() - 3));
+
+          } else if (token_str[0] == 'W') {
+            message.set_msg(token_str.substr(2, token_str.length() - 3));
+
+          } else {
+            stream->Write(message);
+            count++;
+          }
+          token++;
+        }
+
+        if (count < 20) stream->Write(message);
+        following_file.close();
+      }
+    }
   
   Status List(ServerContext* context, const Request* request, ListReply* list_reply) override {
     /*********
@@ -234,6 +292,8 @@ class SNSServiceImpl final : public SNSService::Service {
     
     Client* author = 0;
     Message message;
+    std::ofstream sender_file;
+    std::ofstream follower_file;
 
     auto meta_data = context->client_metadata().find("username");
 
@@ -248,9 +308,21 @@ class SNSServiceImpl final : public SNSService::Service {
     }
     mtx.unlock();
 
+    writeFileContentsToStream(author->username + "_following.txt", stream);
+
     while (stream->Read(&message)) {
       for (Client* follower: author->client_followers) {
         if (follower->stream != 0) follower->stream->Write(message);
+        
+        std::string message_string = getMessageAsString(message);
+
+        sender_file.open(author->username + ".txt", std::ios_base::app);
+        sender_file << message_string;
+        sender_file.close();
+
+        follower_file.open(follower->username + "_following.txt", std::ios_base::app);
+        follower_file << message_string;
+        follower_file.close();
       }
     }
 
