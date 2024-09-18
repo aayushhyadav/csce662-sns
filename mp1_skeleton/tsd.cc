@@ -134,10 +134,12 @@ class SNSServiceImpl final : public SNSService::Service {
             message.set_username(token_str.substr(2, token_str.length() - 3));
 
           } else if (token_str[0] == 'W') {
-            message.set_msg(token_str.substr(2, token_str.length() - 3));
+            message.set_msg(token_str.substr(2, token_str.length() - 2));
 
           } else {
+            mtx.lock();
             stream->Write(message);
+            mtx.unlock();
             count++;
           }
           token++;
@@ -311,18 +313,21 @@ class SNSServiceImpl final : public SNSService::Service {
     writeFileContentsToStream(author->username + "_following.txt", stream);
 
     while (stream->Read(&message)) {
+      std::string message_string = getMessageAsString(message);
+    
+      sender_file.open(author->username + ".txt", std::ios_base::app);
+      sender_file << message_string;
+      sender_file.close();
+
       for (Client* follower: author->client_followers) {
+        mtx.lock();
+
         if (follower->stream != 0) follower->stream->Write(message);
-        
-        std::string message_string = getMessageAsString(message);
-
-        sender_file.open(author->username + ".txt", std::ios_base::app);
-        sender_file << message_string;
-        sender_file.close();
-
         follower_file.open(follower->username + "_following.txt", std::ios_base::app);
         follower_file << message_string;
         follower_file.close();
+        
+        mtx.unlock();
       }
     }
 
