@@ -90,6 +90,7 @@ class SNSServiceImpl final : public SNSService::Service {
   private:
     std::mutex mtx;
 
+    //constructing a string from Message object to write in the file
     std::string getMessageAsString(Message message) {
       std::string message_string("T ");
 
@@ -122,6 +123,8 @@ class SNSServiceImpl final : public SNSService::Service {
         std::string token_str;
         int count = 0;
 
+        //parsing the contents read from the file in reverse direction
+        //and writing the 20 latest posts into the stream
         while (token != tokens.rend() && count < 20) {
           token_str = *token;
 
@@ -151,10 +154,7 @@ class SNSServiceImpl final : public SNSService::Service {
     }
   
   Status List(ServerContext* context, const Request* request, ListReply* list_reply) override {
-    /*********
-    YOUR CODE HERE
-    **********/
-
+    
     Client* logged_in_client;
 
     for (Client* client: client_db) {
@@ -171,12 +171,10 @@ class SNSServiceImpl final : public SNSService::Service {
 
   Status Follow(ServerContext* context, const Request* request, Reply* reply) override {
 
-    /*********
-    YOUR CODE HERE
-    **********/
-
     Client* loggedInClient = nullptr;
     Client* clientToFollow = nullptr;
+
+    bool can_follow = true;
 
     for (Client* client: client_db) {
       if (client->username == request->username()) {
@@ -197,9 +195,19 @@ class SNSServiceImpl final : public SNSService::Service {
       reply->set_msg("Input username already exists, command failed\n");
 
     } else {
-      loggedInClient->client_following.push_back(clientToFollow);
-      clientToFollow->client_followers.push_back(loggedInClient);
-      reply->set_msg("Command completed successfully\n");
+      for (Client* client: loggedInClient->client_following) {
+        if (client->username == clientToFollow->username) {
+          can_follow = false;
+          reply->set_msg("Input username already exists, command failed\n");
+          break;
+        }
+      }
+
+      if (can_follow) {
+        loggedInClient->client_following.push_back(clientToFollow);
+        clientToFollow->client_followers.push_back(loggedInClient);
+        reply->set_msg("Command completed successfully\n");
+      }
     }
 
     return Status::OK; 
@@ -207,14 +215,11 @@ class SNSServiceImpl final : public SNSService::Service {
 
   Status UnFollow(ServerContext* context, const Request* request, Reply* reply) override {
 
-    /*********
-    YOUR CODE HERE
-    **********/
-
     Client* loggedInClient = nullptr;
     Client* clientToUnFollow = nullptr;
 
     int curIndex;
+    bool can_unfollow = false;
 
     for (Client* client: client_db) {
       if (client->username == request->username()) {
@@ -239,9 +244,15 @@ class SNSServiceImpl final : public SNSService::Service {
       for (Client* client: loggedInClient->client_following) {
         if (client == clientToUnFollow) {
           loggedInClient->client_following.erase(clientFollowingIterator + curIndex);
+          can_unfollow = true;
           break;
         }
         curIndex++;
+      }
+
+      if (!can_unfollow) {
+        reply->set_msg("Command failed with invalid username\n");
+        return Status::OK;
       }
 
       curIndex = 0;
@@ -262,10 +273,6 @@ class SNSServiceImpl final : public SNSService::Service {
 
   // RPC Login
   Status Login(ServerContext* context, const Request* request, Reply* reply) override {
-
-    /*********
-    YOUR CODE HERE
-    **********/
 
     if (client_db.size() > 0) {
       for (Client* existingClient: client_db) {
@@ -288,10 +295,6 @@ class SNSServiceImpl final : public SNSService::Service {
   Status Timeline(ServerContext* context, 
 		ServerReaderWriter<Message, Message>* stream) override {
 
-    /*********
-    YOUR CODE HERE
-    **********/
-    
     Client* author = 0;
     Message message;
     std::ofstream sender_file;

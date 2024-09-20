@@ -82,7 +82,6 @@ int Client::connectTo()
   // ------------------------------------------------------------
     
 ///////////////////////////////////////////////////////////
-// YOUR CODE HERE
 
     auto channel = grpc::CreateChannel(hostname + ":" + port, grpc::InsecureChannelCredentials());
     stub_ = SNSService::NewStub(channel);
@@ -145,10 +144,6 @@ IReply Client::processCommand(std::string& input)
 
     IReply ire;
     
-    /*********
-    YOUR CODE HERE
-    **********/
-
     std::string delimiter = " ";
     std::size_t index = input.find_first_of(delimiter);
 
@@ -158,6 +153,10 @@ IReply Client::processCommand(std::string& input)
 
       } else if (input.substr(0, index) == "UNFOLLOW") {
         ire = UnFollow(input.substr(index + 1, input.size()));
+
+      } else {
+        ire.comm_status = FAILURE_INVALID;
+        ire.grpc_status = Status::OK;
       }
 
     } else {
@@ -184,10 +183,6 @@ IReply Client::List() {
 
     IReply ire;
 
-    /*********
-    YOUR CODE HERE
-    **********/
-
     ClientContext context;
     Request request;
     ListReply list_reply;
@@ -213,11 +208,7 @@ IReply Client::List() {
 IReply Client::Follow(const std::string& username2) {
 
     IReply ire; 
-      
-    /***
-    YOUR CODE HERE
-    ***/
-
+    
     ClientContext context;
     Request request;
     Reply reply;
@@ -246,10 +237,6 @@ IReply Client::UnFollow(const std::string& username2) {
 
     IReply ire;
 
-    /***
-    YOUR CODE HERE
-    ***/
-
     ClientContext context;
     Request request;
     Reply reply;
@@ -275,10 +262,6 @@ IReply Client::Login() {
 
     IReply ire;
   
-    /***
-     YOUR CODE HERE 
-    ***/
-
     ClientContext context;
     Request request;
     Reply reply;
@@ -321,10 +304,6 @@ void Client::Timeline(const std::string& username) {
     // CTRL-C (SIGINT)
     // ------------------------------------------------------------
   
-    /***
-    YOUR CODE HERE
-    ***/
-
     ClientContext context;
     context.AddMetadata("username", username);
 
