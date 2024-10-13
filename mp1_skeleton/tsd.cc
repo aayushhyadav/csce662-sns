@@ -48,6 +48,7 @@
 #define log(severity, msg) LOG(severity) << msg; google::FlushLogFiles(google::severity); 
 
 #include "sns.grpc.pb.h"
+#include "coordinator.grpc.pb.h"
 
 
 using google::protobuf::Timestamp;
@@ -59,11 +60,15 @@ using grpc::ServerReader;
 using grpc::ServerReaderWriter;
 using grpc::ServerWriter;
 using grpc::Status;
+using grpc::Channel;
+using grpc::ClientContext;
 using csce662::Message;
 using csce662::ListReply;
 using csce662::Request;
 using csce662::Reply;
 using csce662::SNSService;
+using csce662::PathAndData;
+using csce662::CoordService;
 
 
 struct Client {
@@ -84,6 +89,8 @@ std::vector<Client*> client_db;
 //Vector that stores bi-directional stream corresponding to each client
 std::vector<ServerReaderWriter<Message, Message>*> client_writer_streams;
 
+//stub to invoke coordinator functions
+std::unique_ptr<CoordService::Stub> stub_;
 
 class SNSServiceImpl final : public SNSService::Service {
 
@@ -339,7 +346,19 @@ class SNSServiceImpl final : public SNSService::Service {
 
 };
 
-void RunServer(std::string port_no) {
+// server registers with the coordinator
+void connectToCoordinator(PathAndData path_and_data, std::string coordinator_ip, std::string coordinator_port) {
+  auto channel = grpc::CreateChannel(coordinator_ip + ":" + coordinator_port, grpc::InsecureChannelCredentials());
+  stub_ = CoordService::NewStub(channel);
+
+  ClientContext client_context;
+  csce662::Status status;
+  stub_->create(&client_context, path_and_data, &status);
+}
+
+void RunServer(std::string port_no, std::string cluster_id, std::string server_id,
+std::string coordinator_ip, std::string coordinator_port) {
+
   std::string server_address = "0.0.0.0:"+port_no;
   SNSServiceImpl service;
 
@@ -350,27 +369,45 @@ void RunServer(std::string port_no) {
   std::cout << "Server listening on " << server_address << std::endl;
   log(INFO, "Server listening on "+server_address);
 
+  PathAndData path_and_data;
+  path_and_data.set_path(server_address);
+  path_and_data.set_data(cluster_id + "," + server_id);
+
+  connectToCoordinator(path_and_data, coordinator_ip, coordinator_port);
+
   server->Wait();
 }
 
 int main(int argc, char** argv) {
 
-  std::string port = "3010";
-  
+  std::string port = "10000";
+  std::string cluster_id = "1";
+  std::string server_id = "1";
+  std::string coordinator_ip = "localhost";
+  std::string coordinator_port = "3010";
+
   int opt = 0;
-  while ((opt = getopt(argc, argv, "p:")) != -1){
+  while ((opt = getopt(argc, argv, "p:c:s:h:k:")) != -1){
     switch(opt) {
       case 'p':
-          port = optarg;break;
+        port = optarg;break;
+      case 'c':
+        cluster_id = optarg;break;
+      case 's':
+        server_id = optarg;break;
+      case 'h':
+        coordinator_ip = optarg;break;
+      case 'k':
+        coordinator_port = optarg;break;
       default:
-	  std::cerr << "Invalid Command Line Argument\n";
+	      std::cerr << "Invalid Command Line Argument\n";
     }
   }
   
   std::string log_file_name = std::string("server-") + port;
   google::InitGoogleLogging(log_file_name.c_str());
   log(INFO, "Logging Initialized. Server starting...");
-  RunServer(port);
+  RunServer(port, cluster_id, server_id, coordinator_ip, coordinator_port);
 
   return 0;
 }

@@ -9,6 +9,8 @@
 #include "client.h"
 
 #include "sns.grpc.pb.h"
+#include "coordinator.grpc.pb.h"
+
 using grpc::Channel;
 using grpc::ClientContext;
 using grpc::ClientReader;
@@ -20,6 +22,9 @@ using csce662::ListReply;
 using csce662::Request;
 using csce662::Reply;
 using csce662::SNSService;
+using csce662::ID;
+using csce662::ServerInfo;
+using csce662::CoordService;
 
 void sig_ignore(int sig) {
   std::cout << "Signal caught " + sig;
@@ -59,6 +64,9 @@ private:
   // You can have an instance of the client stub
   // as a member variable.
   std::unique_ptr<SNSService::Stub> stub_;
+
+  // stub to invoke coordinator functions
+  std::unique_ptr<CoordService::Stub> stub_coordinator;
   
   IReply Login();
   IReply List();
@@ -83,8 +91,20 @@ int Client::connectTo()
     
 ///////////////////////////////////////////////////////////
 
-    auto channel = grpc::CreateChannel(hostname + ":" + port, grpc::InsecureChannelCredentials());
-    stub_ = SNSService::NewStub(channel);
+    //create a connection with the Coordinator
+    auto coordinator_channel = grpc::CreateChannel(hostname + ":" + port, grpc::InsecureChannelCredentials());
+    stub_coordinator = CoordService::NewStub(coordinator_channel);
+
+    ClientContext client_context;
+    ID id;
+    ServerInfo server_info;
+
+    id.set_id(std::stoi(username));
+    stub_coordinator->GetServer(&client_context, id, &server_info);
+
+    //create a connection with the server
+    auto server_channel = grpc::CreateChannel(server_info.hostname() + ":" + server_info.port(), grpc::InsecureChannelCredentials());
+    stub_ = SNSService::NewStub(server_channel);
 
     IReply ire = Login();
 
@@ -344,13 +364,13 @@ int main(int argc, char** argv) {
   std::string port = "3010";
     
   int opt = 0;
-  while ((opt = getopt(argc, argv, "h:u:p:")) != -1){
+  while ((opt = getopt(argc, argv, "h:u:k:")) != -1){
     switch(opt) {
     case 'h':
       hostname = optarg;break;
     case 'u':
       username = optarg;break;
-    case 'p':
+    case 'k':
       port = optarg;break;
     default:
       std::cout << "Invalid Command Line Argument\n";
