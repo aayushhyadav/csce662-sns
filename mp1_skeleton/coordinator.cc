@@ -83,6 +83,18 @@ class CoordServiceImpl final : public CoordService::Service {
 
     Status Heartbeat(ServerContext* context, const ServerInfo* serverinfo, Confirmation* confirmation) override {
         // Your code here
+        auto meta_data = context->client_metadata().find("cluster_id");
+        int cluster_id = std::stoi(meta_data->second.data());
+
+        confirmation->set_status(false);
+
+        for (zNode* node: clusters[cluster_id - 1]) {
+            if (node->serverID == serverinfo->serverid()) {
+                node->last_heartbeat = getTimeNow();
+                confirmation->set_status(true);
+                break;
+            }
+        }
         return Status::OK;
     }
 
@@ -92,15 +104,12 @@ class CoordServiceImpl final : public CoordService::Service {
     Status GetServer(ServerContext* context, const ID* id, ServerInfo* serverinfo) override {
         // Your code here
         int cluster_id = ((id->id() - 1) % 3) + 1;
-        int server_id = 1;
-
+        
         zNode* selected_server = nullptr;
 
         for (zNode* node: clusters.at(cluster_id - 1)) {
-            if (node->serverID == server_id) {
-                selected_server = node;
-                break;
-            }
+            selected_server = node;
+            break;
         }
         
         if (selected_server == nullptr || !selected_server->isActive()) return Status::OK;
@@ -116,28 +125,40 @@ class CoordServiceImpl final : public CoordService::Service {
     Status create(ServerContext* context, const PathAndData* path_and_data, csce662::Status* status) override {
         int path_token_delimiter_index = path_and_data->path().find(':');
         int data_token_delimiter_index = path_and_data->data().find(',');
+        int cluster_id = std::stoi(path_and_data->data().substr(0, data_token_delimiter_index));
+        int server_id = std::stoi(path_and_data->data().substr(data_token_delimiter_index + 1));
+
+        for (zNode* node: clusters[cluster_id - 1]) {
+            if (node->serverID == server_id) {
+                node->missed_heartbeat = false;
+                status->set_status(true);
+                return Status::OK;
+            }
+        }
 
         zNode* new_server = new zNode();
         new_server->hostname = path_and_data->path().substr(0, path_token_delimiter_index);
         new_server->port = path_and_data->path().substr(path_token_delimiter_index + 1);
-        new_server->serverID = std::stoi(path_and_data->data().substr(data_token_delimiter_index + 1));
-
-        int cluster_id = std::stoi(path_and_data->data().substr(0, data_token_delimiter_index));
+        new_server->serverID = server_id;
 
         switch (cluster_id) {
             case 1:
                 cluster1.push_back(new_server);
                 clusters[cluster_id - 1] = cluster1;
+                status->set_status(true);
                 break;
             case 2:
                 cluster2.push_back(new_server);
                 clusters[cluster_id - 1] = cluster2;
+                status->set_status(true);
                 break;
             case 3:
                 cluster3.push_back(new_server);
                 clusters[cluster_id - 1] = cluster3;
+                status->set_status(true);
                 break;
             default:
+                status->set_status(false);
                 break;
         }
 
@@ -199,7 +220,6 @@ void checkHeartbeat(){
         // iterating through the clusters vector of vectors of znodes
         for (auto& c : clusters){
             for(auto& s : c){
-                std::cout << s->last_heartbeat << '\n';
                 if(difftime(getTimeNow(),s->last_heartbeat)>10){
                     std::cout << "missed heartbeat from server " << s->serverID << std::endl;
                     if(!s->missed_heartbeat){

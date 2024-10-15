@@ -14,7 +14,7 @@ void IClient::run()
     IReply reply = processCommand(cmd);
     displayCommandReply(cmd, reply);
     if (reply.grpc_status.ok() && reply.comm_status == SUCCESS
-	&& cmd == "TIMELINE") {
+    && cmd == "TIMELINE") {
       std::cout << "Now you are in the timeline" << std::endl;
       processTimeline();
     }

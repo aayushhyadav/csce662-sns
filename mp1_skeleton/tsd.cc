@@ -37,10 +37,12 @@
 #include <google/protobuf/duration.pb.h>
 
 #include <fstream>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <stdlib.h>
+#include <thread>
 #include <unistd.h>
 #include <google/protobuf/util/time_util.h>
 #include <grpc++/grpc++.h>
@@ -68,6 +70,8 @@ using csce662::Request;
 using csce662::Reply;
 using csce662::SNSService;
 using csce662::PathAndData;
+using csce662::Confirmation;
+using csce662::ServerInfo;
 using csce662::CoordService;
 
 
@@ -91,6 +95,9 @@ std::vector<ServerReaderWriter<Message, Message>*> client_writer_streams;
 
 //stub to invoke coordinator functions
 std::unique_ptr<CoordService::Stub> stub_;
+
+//directory to store user posts
+std::string server_file_directory;
 
 class SNSServiceImpl final : public SNSService::Service {
 
@@ -320,12 +327,12 @@ class SNSServiceImpl final : public SNSService::Service {
     }
     mtx.unlock();
 
-    writeFileContentsToStream(author->username + "_following.txt", stream);
+    writeFileContentsToStream(server_file_directory + "/" + author->username + "_following.txt", stream);
 
     while (stream->Read(&message)) {
       std::string message_string = getMessageAsString(message);
     
-      sender_file.open(author->username + ".txt", std::ios_base::app);
+      sender_file.open(server_file_directory + "/" + author->username + ".txt", std::ios_base::app);
       sender_file << message_string;
       sender_file.close();
 
@@ -333,7 +340,7 @@ class SNSServiceImpl final : public SNSService::Service {
         mtx.lock();
 
         if (follower->stream != 0) follower->stream->Write(message);
-        follower_file.open(follower->username + "_following.txt", std::ios_base::app);
+        follower_file.open(server_file_directory + "/" + follower->username + "_following.txt", std::ios_base::app);
         follower_file << message_string;
         follower_file.close();
         
@@ -346,6 +353,26 @@ class SNSServiceImpl final : public SNSService::Service {
 
 };
 
+void sendHeartbeat(PathAndData path_and_data) {
+  ServerInfo server_info;
+  Confirmation confirmation;
+
+  int path_token_delimiter_index = path_and_data.path().find(':');
+  int data_token_delimiter_index = path_and_data.data().find(',');
+
+  server_info.set_hostname(path_and_data.path().substr(0, path_token_delimiter_index));
+  server_info.set_port(path_and_data.path().substr(path_token_delimiter_index + 1));
+  server_info.set_serverid(std::stoi(path_and_data.data().substr(data_token_delimiter_index + 1)));
+  std::string cluster_id = path_and_data.data().substr(0, data_token_delimiter_index);
+
+  while (true) {
+    ClientContext client_context;
+    client_context.AddMetadata("cluster_id", cluster_id);
+    stub_->Heartbeat(&client_context, server_info, &confirmation);
+    sleep(5);
+  }
+}
+
 // server registers with the coordinator
 void connectToCoordinator(PathAndData path_and_data, std::string coordinator_ip, std::string coordinator_port) {
   auto channel = grpc::CreateChannel(coordinator_ip + ":" + coordinator_port, grpc::InsecureChannelCredentials());
@@ -354,6 +381,12 @@ void connectToCoordinator(PathAndData path_and_data, std::string coordinator_ip,
   ClientContext client_context;
   csce662::Status status;
   stub_->create(&client_context, path_and_data, &status);
+
+  if (status.status()) {
+    // spawn a new thread to send heartbeats to the coordinator
+    std::thread heartbeat(sendHeartbeat, path_and_data);
+    heartbeat.join();
+  }
 }
 
 void RunServer(std::string port_no, std::string cluster_id, std::string server_id,
@@ -402,6 +435,15 @@ int main(int argc, char** argv) {
       default:
 	      std::cerr << "Invalid Command Line Argument\n";
     }
+  }
+
+  server_file_directory = "server_" + cluster_id + "_" + server_id;
+  
+  // create the directory to store user files containing their posts 
+  if(std::filesystem::create_directories(server_file_directory)) {
+    std::cout << "Successfully created the directory!\n";
+  } else {
+    std::cout << "Failed to create the directory\n";
   }
   
   std::string log_file_name = std::string("server-") + port;
