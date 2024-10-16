@@ -184,8 +184,9 @@ IReply Client::processCommand(std::string& input)
         ire = List();
 
       } else {
-        ire.comm_status = SUCCESS;
-        ire.grpc_status = Status::OK;
+        // for timeline command, invoke the list function to check if the server is active or not
+        // because the timeline function does not return
+        ire = List();
       }
     }
 
@@ -218,7 +219,8 @@ IReply Client::List() {
       ire.followers.push_back(username);
     }
 
-    ire.comm_status = SUCCESS;
+    // if all_users is empty then server is not active
+    ire.comm_status = (list_reply.all_users().size() == 0) ? FAILURE_UNKNOWN : SUCCESS;
     ire.grpc_status = Status::OK;
 
     return ire;
@@ -243,6 +245,9 @@ IReply Client::Follow(const std::string& username2) {
 
     } else if(reply.msg() == "Input username already exists, command failed\n") {
       ire.comm_status = FAILURE_ALREADY_EXISTS;
+
+    } else if (reply.msg().length() == 0) {
+      ire.comm_status = FAILURE_UNKNOWN;
 
     } else {
       ire.comm_status = SUCCESS;
@@ -269,7 +274,10 @@ IReply Client::UnFollow(const std::string& username2) {
     if (reply.msg() == "Command failed with invalid username\n") {
       ire.comm_status = FAILURE_INVALID_USERNAME;
 
-    }  else {
+    } else if (reply.msg().length() == 0) {
+      ire.comm_status = FAILURE_UNKNOWN;
+      
+    } else {
       ire.comm_status = SUCCESS;
     }
 
@@ -297,7 +305,7 @@ IReply Client::Login() {
         ire.comm_status = SUCCESS;
 
     } else {
-      ire.comm_status = FAILURE_NOT_EXISTS;
+      ire.comm_status = FAILURE_UNKNOWN;
     }
 
     ire.grpc_status = Status::OK;

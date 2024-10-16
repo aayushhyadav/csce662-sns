@@ -82,12 +82,12 @@ bool zNode::isActive(){
 class CoordServiceImpl final : public CoordService::Service {
 
     Status Heartbeat(ServerContext* context, const ServerInfo* serverinfo, Confirmation* confirmation) override {
-        // Your code here
         auto meta_data = context->client_metadata().find("cluster_id");
         int cluster_id = std::stoi(meta_data->second.data());
 
         confirmation->set_status(false);
 
+        v_mutex.lock();
         for (zNode* node: clusters[cluster_id - 1]) {
             if (node->serverID == serverinfo->serverid()) {
                 node->last_heartbeat = getTimeNow();
@@ -95,6 +95,8 @@ class CoordServiceImpl final : public CoordService::Service {
                 break;
             }
         }
+        v_mutex.unlock();
+        
         return Status::OK;
     }
 
@@ -102,7 +104,6 @@ class CoordServiceImpl final : public CoordService::Service {
     //this function assumes there are always 3 clusters and has math
     //hardcoded to represent this.
     Status GetServer(ServerContext* context, const ID* id, ServerInfo* serverinfo) override {
-        // Your code here
         int cluster_id = ((id->id() - 1) % 3) + 1;
         
         zNode* selected_server = nullptr;
@@ -122,12 +123,14 @@ class CoordServiceImpl final : public CoordService::Service {
         return Status::OK;
     }
 
+    // registers the servers in the routing table (clusters vector)
     Status create(ServerContext* context, const PathAndData* path_and_data, csce662::Status* status) override {
         int path_token_delimiter_index = path_and_data->path().find(':');
         int data_token_delimiter_index = path_and_data->data().find(',');
         int cluster_id = std::stoi(path_and_data->data().substr(0, data_token_delimiter_index));
         int server_id = std::stoi(path_and_data->data().substr(data_token_delimiter_index + 1));
 
+        v_mutex.lock();
         for (zNode* node: clusters[cluster_id - 1]) {
             if (node->serverID == server_id) {
                 node->missed_heartbeat = false;
@@ -135,6 +138,7 @@ class CoordServiceImpl final : public CoordService::Service {
                 return Status::OK;
             }
         }
+        v_mutex.unlock();
 
         zNode* new_server = new zNode();
         new_server->hostname = path_and_data->path().substr(0, path_token_delimiter_index);
@@ -144,17 +148,29 @@ class CoordServiceImpl final : public CoordService::Service {
         switch (cluster_id) {
             case 1:
                 cluster1.push_back(new_server);
+
+                v_mutex.lock();
                 clusters[cluster_id - 1] = cluster1;
+                v_mutex.unlock();
+
                 status->set_status(true);
                 break;
             case 2:
                 cluster2.push_back(new_server);
+
+                v_mutex.lock();
                 clusters[cluster_id - 1] = cluster2;
+                v_mutex.unlock();
+                
                 status->set_status(true);
                 break;
             case 3:
                 cluster3.push_back(new_server);
+
+                v_mutex.lock();
                 clusters[cluster_id - 1] = cluster3;
+                v_mutex.unlock();
+                
                 status->set_status(true);
                 break;
             default:
@@ -170,17 +186,22 @@ class CoordServiceImpl final : public CoordService::Service {
 void RunServer(std::string port_no){
     //start thread to check heartbeats
     std::thread hb(checkHeartbeat);
+    
     //localhost = 127.0.0.1
     std::string server_address("127.0.0.1:"+port_no);
     CoordServiceImpl service;
+    
     //grpc::EnableDefaultHealthCheckService(true);
     //grpc::reflection::InitProtoReflectionServerBuilderPlugin();
     ServerBuilder builder;
+    
     // Listen on the given address without any authentication mechanism.
     builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
+    
     // Register "service" as the instance through which we'll communicate with
     // clients. In this case it corresponds to an *synchronous* service.
     builder.RegisterService(&service);
+    
     // Finally assemble the server.
     std::unique_ptr<Server> server(builder.BuildAndStart());
     std::cout << "Server listening on " << server_address << std::endl;
