@@ -442,8 +442,6 @@ int main(int argc, char** argv) {
   // create the directory to store user files containing their posts 
   if(std::filesystem::create_directories(server_file_directory)) {
     std::cout << "Successfully created the directory!\n";
-  } else {
-    std::cout << "Failed to create the directory\n";
   }
   
   std::string log_file_name = std::string("server-") + port;
