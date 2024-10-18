@@ -20,6 +20,8 @@
 #include <unistd.h>
 #include <google/protobuf/util/time_util.h>
 #include <grpc++/grpc++.h>
+#include<glog/logging.h>
+#define log(severity, msg) LOG(severity) << msg; google::FlushLogFiles(google::severity); 
 
 #include "coordinator.grpc.pb.h"
 #include "coordinator.pb.h"
@@ -87,6 +89,9 @@ class CoordServiceImpl final : public CoordService::Service {
 
         confirmation->set_status(false);
 
+        std::string log_msg = "Received heartbeat from server " + std::to_string(serverinfo->serverid()) + " of cluster " + std::to_string(cluster_id);
+        log(INFO, log_msg);
+
         v_mutex.lock();
         for (zNode* node: clusters[cluster_id - 1]) {
             if (node->serverID == serverinfo->serverid()) {
@@ -106,6 +111,9 @@ class CoordServiceImpl final : public CoordService::Service {
     Status GetServer(ServerContext* context, const ID* id, ServerInfo* serverinfo) override {
         int cluster_id = ((id->id() - 1) % 3) + 1;
         
+        std::string log_msg = "Received request from client " + std::to_string(id->id());
+        log(INFO, log_msg);
+
         zNode* selected_server = nullptr;
 
         for (zNode* node: clusters.at(cluster_id - 1)) {
@@ -130,15 +138,18 @@ class CoordServiceImpl final : public CoordService::Service {
         int cluster_id = std::stoi(path_and_data->data().substr(0, data_token_delimiter_index));
         int server_id = std::stoi(path_and_data->data().substr(data_token_delimiter_index + 1));
 
-        v_mutex.lock();
+        std::string log_msg = "Received request from server " + std::to_string(server_id) + " of cluster " + std::to_string(cluster_id);
+        log(INFO, log_msg);
+
         for (zNode* node: clusters[cluster_id - 1]) {
             if (node->serverID == server_id) {
+                v_mutex.lock();
                 node->missed_heartbeat = false;
+                v_mutex.unlock();
                 status->set_status(true);
                 return Status::OK;
             }
         }
-        v_mutex.unlock();
 
         zNode* new_server = new zNode();
         new_server->hostname = path_and_data->path().substr(0, path_token_delimiter_index);
@@ -148,31 +159,28 @@ class CoordServiceImpl final : public CoordService::Service {
         switch (cluster_id) {
             case 1:
                 cluster1.push_back(new_server);
-
                 v_mutex.lock();
                 clusters[cluster_id - 1] = cluster1;
                 v_mutex.unlock();
-
                 status->set_status(true);
                 break;
+
             case 2:
                 cluster2.push_back(new_server);
-
                 v_mutex.lock();
                 clusters[cluster_id - 1] = cluster2;
                 v_mutex.unlock();
-                
                 status->set_status(true);
                 break;
+
             case 3:
                 cluster3.push_back(new_server);
-
                 v_mutex.lock();
                 clusters[cluster_id - 1] = cluster3;
                 v_mutex.unlock();
-                
                 status->set_status(true);
                 break;
+
             default:
                 status->set_status(false);
                 break;
@@ -205,6 +213,7 @@ void RunServer(std::string port_no){
     // Finally assemble the server.
     std::unique_ptr<Server> server(builder.BuildAndStart());
     std::cout << "Server listening on " << server_address << std::endl;
+    log(INFO, "Coordinator listening on " + server_address);
 
     // Wait for the server to shutdown. Note that some other thread must be
     // responsible for shutting down the server for this call to ever return.
@@ -224,6 +233,11 @@ int main(int argc, char** argv) {
                 std::cerr << "Invalid Command Line Argument\n";
         }
     }
+
+    std::string log_file_name = std::string("coordinator-") + port;
+    google::InitGoogleLogging(log_file_name.c_str());
+
+    log(INFO, "Logging Initialized. Coordinator starting...");
     RunServer(port);
     return 0;
 }

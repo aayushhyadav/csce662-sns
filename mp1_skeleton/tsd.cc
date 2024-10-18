@@ -368,7 +368,10 @@ void sendHeartbeat(PathAndData path_and_data) {
   while (true) {
     ClientContext client_context;
     client_context.AddMetadata("cluster_id", cluster_id);
+
+    log(INFO, "Sending heartbeat to the Coordinator");
     stub_->Heartbeat(&client_context, server_info, &confirmation);
+    
     sleep(5);
   }
 }
@@ -380,6 +383,8 @@ void connectToCoordinator(PathAndData path_and_data, std::string coordinator_ip,
 
   ClientContext client_context;
   csce662::Status status;
+
+  log(INFO, "Registering with the Coordinator...");
   stub_->create(&client_context, path_and_data, &status);
 
   if (status.status()) {
@@ -400,7 +405,7 @@ std::string coordinator_ip, std::string coordinator_port) {
   builder.RegisterService(&service);
   std::unique_ptr<Server> server(builder.BuildAndStart());
   std::cout << "Server listening on " << server_address << std::endl;
-  log(INFO, "Server listening on "+server_address);
+  log(INFO, "Server listening on " + server_address);
 
   PathAndData path_and_data;
   path_and_data.set_path(server_address);
@@ -439,13 +444,14 @@ int main(int argc, char** argv) {
 
   server_file_directory = "server_" + cluster_id + "_" + server_id;
   
-  // create the directory to store user files containing their posts 
-  if(std::filesystem::create_directories(server_file_directory)) {
-    std::cout << "Successfully created the directory!\n";
-  }
-  
   std::string log_file_name = std::string("server-") + port;
   google::InitGoogleLogging(log_file_name.c_str());
+
+  // create the directory to store user files containing their posts 
+  if(std::filesystem::create_directories(server_file_directory)) {
+    log(INFO, "Successfully created the directory to store user posts")
+  }
+  
   log(INFO, "Logging Initialized. Server starting...");
   RunServer(port, cluster_id, server_id, coordinator_ip, coordinator_port);
 
