@@ -363,12 +363,13 @@ void sendHeartbeat(PathAndData path_and_data) {
   server_info.set_hostname(path_and_data.path().substr(0, path_token_delimiter_index));
   server_info.set_port(path_and_data.path().substr(path_token_delimiter_index + 1));
   server_info.set_serverid(std::stoi(path_and_data.data().substr(data_token_delimiter_index + 1)));
+  server_info.set_type("server");
+  server_info.set_clusterid(stoi(path_and_data.data().substr(0, data_token_delimiter_index)));
   std::string cluster_id = path_and_data.data().substr(0, data_token_delimiter_index);
 
   while (true) {
     ClientContext client_context;
-    client_context.AddMetadata("cluster_id", cluster_id);
-
+    
     log(INFO, "Sending heartbeat to the Coordinator");
     stub_->Heartbeat(&client_context, server_info, &confirmation);
     

@@ -50,6 +50,7 @@ struct zNode{
     std::string type;
     std::time_t last_heartbeat;
     bool missed_heartbeat;
+    bool is_master;
     bool isActive();
 
 };
@@ -83,9 +84,43 @@ bool zNode::isActive(){
 
 class CoordServiceImpl final : public CoordService::Service {
 
+    private:
+        void updateRoutingTable(int cluster_id, zNode* new_server, csce662::Status* status) {
+            switch (cluster_id) {
+                case 1:
+                    cluster1.push_back(new_server);
+                    v_mutex.lock();
+                    clusters[cluster_id - 1] = cluster1;
+                    v_mutex.unlock();
+                    status->set_status(true);
+                    break;
+
+                case 2:
+                    cluster2.push_back(new_server);
+                    v_mutex.lock();
+                    clusters[cluster_id - 1] = cluster2;
+                    v_mutex.unlock();
+                    status->set_status(true);
+                    break;
+
+                case 3:
+                    cluster3.push_back(new_server);
+                    v_mutex.lock();
+                    clusters[cluster_id - 1] = cluster3;
+                    v_mutex.unlock();
+                    status->set_status(true);
+                    break;
+
+                default:
+                    status->set_status(false);
+                    break;
+            }
+        }
+
     Status Heartbeat(ServerContext* context, const ServerInfo* serverinfo, Confirmation* confirmation) override {
-        auto meta_data = context->client_metadata().find("cluster_id");
-        int cluster_id = std::stoi(meta_data->second.data());
+        int cluster_id = serverinfo->clusterid();
+        int synchronizer_count = 0;
+        csce662::Status status;
 
         confirmation->set_status(false);
 
@@ -93,15 +128,36 @@ class CoordServiceImpl final : public CoordService::Service {
         log(INFO, log_msg);
 
         v_mutex.lock();
+
         for (zNode* node: clusters[cluster_id - 1]) {
-            if (node->serverID == serverinfo->serverid()) {
-                node->last_heartbeat = getTimeNow();
-                confirmation->set_status(true);
-                break;
+            if (serverinfo->type() == "synchronizer" && node->type == "synchronizer") {
+                synchronizer_count++;
+
+            } else if (serverinfo->type() == "server") {
+                if (node->serverID == serverinfo->serverid()) {
+                    node->last_heartbeat = getTimeNow();
+                    confirmation->set_status(true);
+                    break;
+                }
             }
         }
+
         v_mutex.unlock();
-        
+
+        // create an entry for synchronizer
+        if (serverinfo->type() == "synchronizer" && synchronizer_count < 2) {
+            zNode* new_server = new zNode();
+            new_server->serverID = serverinfo->serverid();
+            new_server->hostname = serverinfo->hostname();
+            new_server->port = serverinfo->port();
+            new_server->type = serverinfo->type();
+            new_server->is_master = synchronizer_count == 0 ? true : false;
+
+            updateRoutingTable(cluster_id, new_server, &status);
+
+            if (status.status()) confirmation->set_status(true);
+        }
+
         return Status::OK;
     }
 
@@ -137,11 +193,13 @@ class CoordServiceImpl final : public CoordService::Service {
         int data_token_delimiter_index = path_and_data->data().find(',');
         int cluster_id = std::stoi(path_and_data->data().substr(0, data_token_delimiter_index));
         int server_id = std::stoi(path_and_data->data().substr(data_token_delimiter_index + 1));
+        int server_count = 0;
 
         std::string log_msg = "Received request from server " + std::to_string(server_id) + " of cluster " + std::to_string(cluster_id);
         log(INFO, log_msg);
 
         for (zNode* node: clusters[cluster_id - 1]) {
+            if (node->type == "server") server_count++;
             if (node->serverID == server_id) {
                 v_mutex.lock();
                 node->missed_heartbeat = false;
@@ -155,36 +213,10 @@ class CoordServiceImpl final : public CoordService::Service {
         new_server->hostname = path_and_data->path().substr(0, path_token_delimiter_index);
         new_server->port = path_and_data->path().substr(path_token_delimiter_index + 1);
         new_server->serverID = server_id;
+        new_server->type = "server";
+        new_server->is_master = server_count == 0 ? true : false;
 
-        switch (cluster_id) {
-            case 1:
-                cluster1.push_back(new_server);
-                v_mutex.lock();
-                clusters[cluster_id - 1] = cluster1;
-                v_mutex.unlock();
-                status->set_status(true);
-                break;
-
-            case 2:
-                cluster2.push_back(new_server);
-                v_mutex.lock();
-                clusters[cluster_id - 1] = cluster2;
-                v_mutex.unlock();
-                status->set_status(true);
-                break;
-
-            case 3:
-                cluster3.push_back(new_server);
-                v_mutex.lock();
-                clusters[cluster_id - 1] = cluster3;
-                v_mutex.unlock();
-                status->set_status(true);
-                break;
-
-            default:
-                status->set_status(false);
-                break;
-        }
+        updateRoutingTable(cluster_id, new_server, status);
 
         return Status::OK;
     }
@@ -246,8 +278,8 @@ int main(int argc, char** argv) {
 
 void checkHeartbeat(){
     while(true){
-        //check servers for heartbeat > 10
-        //if true turn missed heartbeat = true
+        // check servers for heartbeat > 10
+        // if true turn missed heartbeat = true
         // Your code below
 
         v_mutex.lock();
@@ -255,7 +287,7 @@ void checkHeartbeat(){
         // iterating through the clusters vector of vectors of znodes
         for (auto& c : clusters){
             for(auto& s : c){
-                if(difftime(getTimeNow(),s->last_heartbeat)>10){
+                if(s->type != "synchronizer" && difftime(getTimeNow(),s->last_heartbeat) > 10){
                     std::cout << "missed heartbeat from server " << s->serverID << std::endl;
                     if(!s->missed_heartbeat){
                         s->missed_heartbeat = true;
