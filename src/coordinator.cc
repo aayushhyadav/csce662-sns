@@ -198,8 +198,17 @@ class CoordServiceImpl final : public CoordService::Service {
         std::string log_msg = "Received request from server " + std::to_string(server_id) + " of cluster " + std::to_string(cluster_id);
         log(INFO, log_msg);
 
+        // create the cluster directory
+        if (clusters[cluster_id - 1].size() == 0) {
+            if(std::filesystem::create_directories("cluster" + std::to_string(cluster_id))) {
+                log(INFO, "Successfully created the cluster directory")
+            }
+        }
+
         for (zNode* node: clusters[cluster_id - 1]) {
             if (node->type == "server") server_count++;
+
+            // check if the server is restarted
             if (node->serverID == server_id) {
                 v_mutex.lock();
                 node->missed_heartbeat = false;
@@ -207,6 +216,11 @@ class CoordServiceImpl final : public CoordService::Service {
                 status->set_status(true);
                 return Status::OK;
             }
+        }
+
+        // create the server directory
+        if(std::filesystem::create_directories("cluster" + std::to_string(cluster_id) + "/" + std::to_string(server_id))) {
+            log(INFO, "Successfully created the directory to store user files")
         }
 
         zNode* new_server = new zNode();

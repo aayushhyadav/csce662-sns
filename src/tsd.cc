@@ -398,7 +398,7 @@ void connectToCoordinator(PathAndData path_and_data, std::string coordinator_ip,
 void RunServer(std::string port_no, std::string cluster_id, std::string server_id,
 std::string coordinator_ip, std::string coordinator_port) {
 
-  std::string server_address = "0.0.0.0:"+port_no;
+  std::string server_address = "0.0.0.0:" + port_no;
   SNSServiceImpl service;
 
   ServerBuilder builder;
@@ -442,16 +442,9 @@ int main(int argc, char** argv) {
 	      std::cerr << "Invalid Command Line Argument\n";
     }
   }
-
-  server_file_directory = "server_" + cluster_id + "_" + server_id;
   
   std::string log_file_name = std::string("server-") + port;
   google::InitGoogleLogging(log_file_name.c_str());
-
-  // create the directory to store user files containing their posts 
-  if(std::filesystem::create_directories(server_file_directory)) {
-    log(INFO, "Successfully created the directory to store user posts")
-  }
   
   log(INFO, "Logging Initialized. Server starting...");
   RunServer(port, cluster_id, server_id, coordinator_ip, coordinator_port);
