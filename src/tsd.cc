@@ -123,6 +123,7 @@ class SNSServiceImpl final : public SNSService::Service {
       return message_string;
     }
 
+    // writes the file contents specified by filename into the stream 
     void writeFileContentsToStream(std::string filename, ServerReaderWriter<Message, Message>* stream) {
       std::ifstream following_file;
       std::string cur_line;
@@ -306,6 +307,12 @@ class SNSServiceImpl final : public SNSService::Service {
     client_db.push_back(newClient);
     reply->set_msg("Successfully logged in!");
 
+    // create user files to track followers and following information
+    std::ofstream follower_file("./" + server_file_directory + "/" + newClient->username + "_followers.txt");
+    std::ofstream following_file("./" + server_file_directory + "/" + newClient->username + "_following.txt");
+    follower_file.close();
+    following_file.close();
+
     return Status::OK;
   }
 
@@ -330,12 +337,12 @@ class SNSServiceImpl final : public SNSService::Service {
     }
     mtx.unlock();
 
-    writeFileContentsToStream(server_file_directory + "/" + author->username + "_following.txt", stream);
+    writeFileContentsToStream(server_file_directory + "/" + author->username + "_timeline_following.txt", stream);
 
     while (stream->Read(&message)) {
       std::string message_string = getMessageAsString(message);
     
-      sender_file.open(server_file_directory + "/" + author->username + ".txt", std::ios_base::app);
+      sender_file.open(server_file_directory + "/" + author->username + "_timeline.txt", std::ios_base::app);
       sender_file << message_string;
       sender_file.close();
 
@@ -343,7 +350,7 @@ class SNSServiceImpl final : public SNSService::Service {
         mtx.lock();
 
         if (follower->stream != 0) follower->stream->Write(message);
-        follower_file.open(server_file_directory + "/" + follower->username + "_following.txt", std::ios_base::app);
+        follower_file.open(server_file_directory + "/" + follower->username + "_timeline_following.txt", std::ios_base::app);
         follower_file << message_string;
         follower_file.close();
         
@@ -392,7 +399,7 @@ void connectToCoordinator(PathAndData path_and_data, std::string coordinator_ip,
   stub_->create(&client_context, path_and_data, &status);
 
   if (status.status()) {
-    is_master = status.is_master();
+    is_master = status.ismaster();
     // spawn a new thread to send heartbeats to the coordinator
     std::thread heartbeat(sendHeartbeat, path_and_data);
     heartbeat.join();
@@ -416,9 +423,9 @@ std::string coordinator_ip, std::string coordinator_port) {
   path_and_data.set_path(server_address);
   path_and_data.set_data(cluster_id + "," + server_id);
 
-  connectToCoordinator(path_and_data, coordinator_ip, coordinator_port);
-
   server_file_directory = "cluster" + cluster_id + "/" + server_id;
+  connectToCoordinator(path_and_data, coordinator_ip, coordinator_port);
+  
   server->Wait();
 }
 

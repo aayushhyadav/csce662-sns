@@ -176,7 +176,7 @@ class CoordServiceImpl final : public CoordService::Service {
         zNode* selected_server = nullptr;
 
         for (zNode* node: clusters.at(cluster_id - 1)) {
-            selected_server = node;
+            if (node->type == "server" && node->is_master) selected_server = node;
             break;
         }
         
@@ -235,8 +235,8 @@ class CoordServiceImpl final : public CoordService::Service {
 
         updateRoutingTable(cluster_id, new_server, status);
 
-        if (status.status()) {
-            status.set_ismaster(new_server->is_master);
+        if (status->status()) {
+            status->set_ismaster(new_server->is_master);
         }
 
         return Status::OK;

@@ -526,7 +526,7 @@ void Heartbeat(std::string coordinatorIp, std::string coordinatorPort, ServerInf
     // send a heartbeat to the coordinator, which registers your follower synchronizer as either a master or a slave
     stub->Heartbeat(&context, serverInfo, &confirmation);
 
-    if (confirmation.status()) isMaster = confirmation.is_master();
+    if (confirmation.status()) isMaster = confirmation.ismaster();
 }
 
 bool file_contains_user(std::string filename, std::string user)
