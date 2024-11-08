@@ -155,7 +155,10 @@ class CoordServiceImpl final : public CoordService::Service {
 
             updateRoutingTable(cluster_id, new_server, &status);
 
-            if (status.status()) confirmation->set_status(true);
+            if (status.status()) {
+                confirmation->set_status(true);
+                confirmation->set_ismaster(new_server->is_master);
+            }
         }
 
         return Status::OK;
@@ -231,6 +234,10 @@ class CoordServiceImpl final : public CoordService::Service {
         new_server->is_master = server_count == 0 ? true : false;
 
         updateRoutingTable(cluster_id, new_server, status);
+
+        if (status.status()) {
+            status.set_ismaster(new_server->is_master);
+        }
 
         return Status::OK;
     }

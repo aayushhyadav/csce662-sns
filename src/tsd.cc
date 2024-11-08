@@ -99,6 +99,9 @@ std::unique_ptr<CoordService::Stub> stub_;
 //directory to store user posts
 std::string server_file_directory;
 
+//indicates if this server is the master
+bool is_master;
+
 class SNSServiceImpl final : public SNSService::Service {
 
   private:
@@ -389,6 +392,7 @@ void connectToCoordinator(PathAndData path_and_data, std::string coordinator_ip,
   stub_->create(&client_context, path_and_data, &status);
 
   if (status.status()) {
+    is_master = status.is_master();
     // spawn a new thread to send heartbeats to the coordinator
     std::thread heartbeat(sendHeartbeat, path_and_data);
     heartbeat.join();
@@ -414,6 +418,7 @@ std::string coordinator_ip, std::string coordinator_port) {
 
   connectToCoordinator(path_and_data, coordinator_ip, coordinator_port);
 
+  server_file_directory = "cluster" + cluster_id + "/" + server_id;
   server->Wait();
 }
 
