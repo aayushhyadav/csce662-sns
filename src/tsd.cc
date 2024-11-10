@@ -182,7 +182,7 @@ class SNSServiceImpl final : public SNSService::Service {
 
     // mirror the requests to the slave server
     // action could be LOGIN - 1, FOLLOW - 2, TIMELINE - 3
-    void mirrorToSlave(int action, std::string username) {
+    void mirrorToSlave(int action, std::string username, std::string arguments) {
       if (slave_stub == nullptr) {
         auto channel = grpc::CreateChannel(slave_hostname + ":" + slave_port, grpc::InsecureChannelCredentials());
         slave_stub = SNSService::NewStub(channel);
@@ -197,9 +197,28 @@ class SNSServiceImpl final : public SNSService::Service {
           request.set_username(username);
           slave_stub->Login(&context, request, &reply);
           break;
+        
+        case 2:
+          request.set_username(username);
+          request.add_arguments(arguments);
+          slave_stub->Follow(&context, request, &reply);
+          break;
 
         default:
           break;
+      }
+    }
+
+    // updates the file contents with user/timeline information
+    void updateFiles(std::string path, std::string contents) {
+      std::ofstream file(path, std::ios::app);
+
+      if (file.is_open()) {
+        file << contents << std::endl;
+        file.close();
+
+      } else {
+        log(ERROR, "Could not open the file - " + path);
       }
     }
   
@@ -246,6 +265,7 @@ class SNSServiceImpl final : public SNSService::Service {
 
     } else {
       for (Client* client: loggedInClient->client_following) {
+        // client cannot follow the same person again
         if (client->username == clientToFollow->username) {
           can_follow = false;
           reply->set_msg("Input username already exists, command failed\n");
@@ -256,6 +276,13 @@ class SNSServiceImpl final : public SNSService::Service {
       if (can_follow) {
         loggedInClient->client_following.push_back(clientToFollow);
         clientToFollow->client_followers.push_back(loggedInClient);
+
+        updateFiles(server_file_directory + "/" + loggedInClient->username + "_following.txt", clientToFollow->username);
+        updateFiles(server_file_directory + "/" + clientToFollow->username + "_followers.txt", loggedInClient->username);
+
+        // forward the follow request to the slave server
+        if (is_master && slave_hostname.size() != 0) mirrorToSlave(2, request->username(), request->arguments(0));
+
         reply->set_msg("Command completed successfully\n");
       }
     }
@@ -345,12 +372,8 @@ class SNSServiceImpl final : public SNSService::Service {
     follower_file.close();
     following_file.close();
 
-    // master server mirrors the requests to the slave server
-    if (is_master) {
-      if (slave_hostname.size() != 0) {
-        mirrorToSlave(1, newClient->username);
-      }
-    }
+    // forward the login request to the slave server
+    if (is_master && slave_hostname.size() != 0) mirrorToSlave(1, newClient->username, "");
 
     return Status::OK;
   }
