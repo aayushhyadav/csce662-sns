@@ -86,28 +86,24 @@ class CoordServiceImpl final : public CoordService::Service {
 
     private:
         void updateRoutingTable(int cluster_id, zNode* new_server, csce662::Status* status) {
+            v_mutex.lock();
+
             switch (cluster_id) {
                 case 1:
                     cluster1.push_back(new_server);
-                    v_mutex.lock();
                     clusters[cluster_id - 1] = cluster1;
-                    v_mutex.unlock();
                     status->set_status(true);
                     break;
 
                 case 2:
                     cluster2.push_back(new_server);
-                    v_mutex.lock();
                     clusters[cluster_id - 1] = cluster2;
-                    v_mutex.unlock();
                     status->set_status(true);
                     break;
 
                 case 3:
                     cluster3.push_back(new_server);
-                    v_mutex.lock();
                     clusters[cluster_id - 1] = cluster3;
-                    v_mutex.unlock();
                     status->set_status(true);
                     break;
 
@@ -115,6 +111,8 @@ class CoordServiceImpl final : public CoordService::Service {
                     status->set_status(false);
                     break;
             }
+
+            v_mutex.unlock();
         }
 
     Status Heartbeat(ServerContext* context, const ServerInfo* serverinfo, Confirmation* confirmation) override {
@@ -239,6 +237,22 @@ class CoordServiceImpl final : public CoordService::Service {
             status->set_ismaster(new_server->is_master);
         }
 
+        return Status::OK;
+    }
+
+    // provides the information about the slave server corresponding to the
+    // specified cluster ID
+    Status GetSlave(ServerContext* context, const ID* id, ServerInfo* serverinfo) {
+        int cluster_id = id->id();
+
+        for (zNode* node: clusters[cluster_id - 1]) {
+            if (node->type == "server" && !node->is_master) {
+                serverinfo->set_hostname(node->hostname);
+                serverinfo->set_port(node->port);
+                return Status::OK;
+            }
+        }
+        
         return Status::OK;
     }
 

@@ -68,10 +68,11 @@ using csce662::Message;
 using csce662::ListReply;
 using csce662::Request;
 using csce662::Reply;
-using csce662::SNSService;
 using csce662::PathAndData;
 using csce662::Confirmation;
 using csce662::ServerInfo;
+using csce662::ID;
+using csce662::SNSService;
 using csce662::CoordService;
 
 
@@ -95,6 +96,8 @@ std::vector<ServerReaderWriter<Message, Message>*> client_writer_streams;
 
 //stub to invoke coordinator functions
 std::unique_ptr<CoordService::Stub> stub_;
+// stub to invoke slave functions
+std::unique_ptr<SNSService::Stub> slave_stub = nullptr;
 
 //directory to store user posts
 std::string server_file_directory;
@@ -102,10 +105,16 @@ std::string server_file_directory;
 //indicates if this server is the master
 bool is_master;
 
+int cluster;
+std::string slave_hostname;
+std::string slave_port;
+
+// mutex to access the shared resources
+std::mutex mtx;
+
 class SNSServiceImpl final : public SNSService::Service {
 
   private:
-    std::mutex mtx;
 
     //constructing a string from Message object to write in the file
     std::string getMessageAsString(Message message) {
@@ -168,6 +177,29 @@ class SNSServiceImpl final : public SNSService::Service {
 
         if (count < 20) stream->Write(message);
         following_file.close();
+      }
+    }
+
+    // mirror the requests to the slave server
+    // action could be LOGIN - 1, FOLLOW - 2, TIMELINE - 3
+    void mirrorToSlave(int action, std::string username) {
+      if (slave_stub == nullptr) {
+        auto channel = grpc::CreateChannel(slave_hostname + ":" + slave_port, grpc::InsecureChannelCredentials());
+        slave_stub = SNSService::NewStub(channel);
+      }
+
+      ClientContext context;
+      Request request;
+      Reply reply;
+
+      switch(action) {
+        case 1:
+          request.set_username(username);
+          slave_stub->Login(&context, request, &reply);
+          break;
+
+        default:
+          break;
       }
     }
   
@@ -313,6 +345,13 @@ class SNSServiceImpl final : public SNSService::Service {
     follower_file.close();
     following_file.close();
 
+    // master server mirrors the requests to the slave server
+    if (is_master) {
+      if (slave_hostname.size() != 0) {
+        mirrorToSlave(1, newClient->username);
+      }
+    }
+
     return Status::OK;
   }
 
@@ -378,10 +417,23 @@ void sendHeartbeat(PathAndData path_and_data) {
   std::string cluster_id = path_and_data.data().substr(0, data_token_delimiter_index);
 
   while (true) {
-    ClientContext client_context;
-    
+    ClientContext context1;
+
     log(INFO, "Sending heartbeat to the Coordinator");
-    stub_->Heartbeat(&client_context, server_info, &confirmation);
+    stub_->Heartbeat(&context1, server_info, &confirmation);
+
+    if (slave_hostname.size() == 0) {
+      ClientContext context2;
+      ID id;
+      ServerInfo serverinfo;
+
+      id.set_id(cluster);
+      log(INFO, "Fetching Slave information from the Coordinator");
+
+      Status status = stub_->GetSlave(&context2, id, &serverinfo);
+      slave_hostname = serverinfo.hostname();
+      slave_port = serverinfo.port();
+    }
     
     sleep(5);
   }
@@ -424,8 +476,9 @@ std::string coordinator_ip, std::string coordinator_port) {
   path_and_data.set_data(cluster_id + "," + server_id);
 
   server_file_directory = "cluster" + cluster_id + "/" + server_id;
+  cluster = stoi(cluster_id);
+
   connectToCoordinator(path_and_data, coordinator_ip, coordinator_port);
-  
   server->Wait();
 }
 
