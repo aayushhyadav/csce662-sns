@@ -64,6 +64,7 @@ using grpc::ServerWriter;
 using grpc::Status;
 using grpc::Channel;
 using grpc::ClientContext;
+using grpc::ClientReaderWriter;
 using csce662::Message;
 using csce662::ListReply;
 using csce662::Request;
@@ -127,7 +128,6 @@ class SNSServiceImpl final : public SNSService::Service {
       message_string.append("\n");
       message_string.append("W ");
       message_string.append(message.msg());
-      message_string.append("\n");
 
       return message_string;
     }
@@ -204,6 +204,19 @@ class SNSServiceImpl final : public SNSService::Service {
           slave_stub->Follow(&context, request, &reply);
           break;
 
+        case 3:
+          context.AddMetadata("username", username);
+
+          // replacing the space and newline characters to make the
+          // metadata compatible with gRPC headers standards as gRPC
+          // headers do not allow these characters
+          std::replace(arguments.begin(), arguments.end(), ' ', ',');
+          std::replace(arguments.begin(), arguments.end(), '\n', ';');
+
+          context.AddMetadata("post", arguments);
+          slave_stub->Timeline(&context);
+          break;
+
         default:
           break;
       }
@@ -211,6 +224,7 @@ class SNSServiceImpl final : public SNSService::Service {
 
     // updates the file contents with user/timeline information
     void updateFiles(std::string path, std::string contents) {
+      mtx.lock();
       std::ofstream file(path, std::ios::app);
 
       if (file.is_open()) {
@@ -219,6 +233,35 @@ class SNSServiceImpl final : public SNSService::Service {
 
       } else {
         log(ERROR, "Could not open the file - " + path);
+      }
+      mtx.unlock();
+    }
+
+    // replicate the posts in the file system
+    // this code only executes on the slave server
+    void replicateTimeline(ServerContext* context) {
+      auto username = context->client_metadata().find("username");
+      auto post = context->client_metadata().find("post");
+      Client* author;
+
+      std::string username_string = std::string(username->second.data(), username->second.size());
+      std::string post_string = std::string(post->second.data(), post->second.size());
+
+      // convert back to the desired format
+      std::replace(post_string.begin(), post_string.end(), ',', ' ');
+      std::replace(post_string.begin(), post_string.end(), ';', '\n');
+
+      updateFiles(server_file_directory + "/" + username_string + "_timeline.txt", post_string);
+
+      for (Client* client: client_db) {
+        if (username_string == client->username) {
+          author = client;
+          break;
+        }
+      }
+      
+      for (Client* follower: author->client_followers) {
+        updateFiles(server_file_directory + "/" + follower->username + "_timeline_following.txt", post_string);
       }
     }
   
@@ -383,8 +426,11 @@ class SNSServiceImpl final : public SNSService::Service {
 
     Client* author = 0;
     Message message;
-    std::ofstream sender_file;
-    std::ofstream follower_file;
+
+    if (!is_master) {
+      replicateTimeline(context);
+      return Status::OK;
+    }
 
     auto meta_data = context->client_metadata().find("username");
 
@@ -403,21 +449,15 @@ class SNSServiceImpl final : public SNSService::Service {
 
     while (stream->Read(&message)) {
       std::string message_string = getMessageAsString(message);
-    
-      sender_file.open(server_file_directory + "/" + author->username + "_timeline.txt", std::ios_base::app);
-      sender_file << message_string;
-      sender_file.close();
+      updateFiles(server_file_directory + "/" + author->username + "_timeline.txt", message_string);
 
       for (Client* follower: author->client_followers) {
-        mtx.lock();
-
         if (follower->stream != 0) follower->stream->Write(message);
-        follower_file.open(server_file_directory + "/" + follower->username + "_timeline_following.txt", std::ios_base::app);
-        follower_file << message_string;
-        follower_file.close();
-        
-        mtx.unlock();
+        updateFiles(server_file_directory + "/" + follower->username + "_timeline_following.txt", message_string);
       }
+
+      // mirror the user posts on the slave server
+      if (is_master) mirrorToSlave(3, author->username, message_string);
     }
 
     return Status::OK;
