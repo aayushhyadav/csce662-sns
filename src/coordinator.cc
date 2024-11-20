@@ -174,11 +174,17 @@ class CoordServiceImpl final : public CoordService::Service {
         zNode* selected_server = nullptr;
 
         for (zNode* node: clusters.at(cluster_id - 1)) {
-            if (node->type == "server" && node->is_master) selected_server = node;
-            break;
+            if (node->type == "server" && node->is_master) {
+                selected_server = node->isActive() ? node : nullptr;
+                if (selected_server != nullptr) break;
+
+            } else if (node->type == "server" && !node->is_master) {
+                selected_server = node->isActive() ? node : nullptr;
+                if (selected_server != nullptr) break;
+            }
         }
         
-        if (selected_server == nullptr || !selected_server->isActive()) return Status::OK;
+        if (selected_server == nullptr) return Status::OK;
 
         serverinfo->set_serverid(selected_server->serverID);
         serverinfo->set_hostname(selected_server->hostname);
@@ -242,7 +248,7 @@ class CoordServiceImpl final : public CoordService::Service {
 
     // provides the information about the slave server corresponding to the
     // specified cluster ID
-    Status GetSlave(ServerContext* context, const ID* id, ServerInfo* serverinfo) {
+    Status GetSlave(ServerContext* context, const ID* id, ServerInfo* serverinfo) override {
         int cluster_id = id->id();
 
         for (zNode* node: clusters[cluster_id - 1]) {
@@ -309,8 +315,6 @@ int main(int argc, char** argv) {
     return 0;
 }
 
-
-
 void checkHeartbeat(){
     while(true){
         // check servers for heartbeat > 10
@@ -337,7 +341,6 @@ void checkHeartbeat(){
         sleep(3);
     }
 }
-
 
 std::time_t getTimeNow(){
     return std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());

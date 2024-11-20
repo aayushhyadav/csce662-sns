@@ -84,6 +84,8 @@ struct Client {
   std::vector<Client*> client_followers;
   std::vector<Client*> client_following;
   ServerReaderWriter<Message, Message>* stream = 0;
+  std::time_t last_heartbeat;
+  bool missed_heartbeat;
   bool operator==(const Client& c1) const{
     return (username == c1.username);
   }
@@ -112,6 +114,10 @@ std::string slave_port;
 
 // mutex to access the shared resources
 std::mutex mtx;
+
+std::time_t getTimeNow(){
+  return std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+}
 
 class SNSServiceImpl final : public SNSService::Service {
 
@@ -397,7 +403,8 @@ class SNSServiceImpl final : public SNSService::Service {
     if (client_db.size() > 0) {
       for (Client* existingClient: client_db) {
         if (existingClient->username == request->username()) {
-          reply->set_msg("User already exists!");
+          if (!existingClient->missed_heartbeat) reply->set_msg("User already exists!");
+          else reply->set_msg("Successfully logged in!");
           return Status::OK;
         }
       } 
@@ -405,6 +412,9 @@ class SNSServiceImpl final : public SNSService::Service {
 
     Client* newClient = new Client();
     newClient->username = request->username();
+    
+    // make a note of the first heartbeat timestamp
+    newClient->last_heartbeat = getTimeNow();
     
     client_db.push_back(newClient);
     reply->set_msg("Successfully logged in!");
@@ -463,8 +473,27 @@ class SNSServiceImpl final : public SNSService::Service {
     return Status::OK;
   }
 
+  // receives heartbeats from clients
+  // updates the last_heartbeat of the corresponding client
+  Status Heartbeat(ServerContext* context, const Request* request, Reply* reply) override {
+    mtx.lock();
+
+    for (Client* client: client_db) {
+      log(INFO, "Received heartbeat from client " + client->username)
+      if (client->username == request->username()) {
+        client->last_heartbeat = getTimeNow();
+        client->missed_heartbeat = false;
+        break;
+      }
+    }
+
+    mtx.unlock();
+    return Status::OK;
+  }
+
 };
 
+// function to send heartbeat messages from server to coordinator
 void sendHeartbeat(PathAndData path_and_data) {
   ServerInfo server_info;
   Confirmation confirmation;
@@ -502,6 +531,26 @@ void sendHeartbeat(PathAndData path_and_data) {
   }
 }
 
+// function to keep track of heartbeat messages from clients
+// if the time elapsed between 2 consecutive heartbeats exceeds 60 seconds
+// consider the client is disconnected
+void checkClientHeartbeat() {
+  while (true) {
+    mtx.lock();
+
+    for (Client* client: client_db) {
+      if (!client->missed_heartbeat && difftime(getTimeNow(), client->last_heartbeat) > 60) {
+        log(INFO, "Client " + client->username + " disconnected");
+        std::cout << "client " << client->username << " disconnected" << std::endl;
+        client->missed_heartbeat = true;
+      }
+    }
+
+    mtx.unlock();
+    sleep(5);
+  }
+}
+
 // server registers with the coordinator
 void connectToCoordinator(PathAndData path_and_data, std::string coordinator_ip, std::string coordinator_port) {
   auto channel = grpc::CreateChannel(coordinator_ip + ":" + coordinator_port, grpc::InsecureChannelCredentials());
@@ -515,9 +564,14 @@ void connectToCoordinator(PathAndData path_and_data, std::string coordinator_ip,
 
   if (status.status()) {
     is_master = status.ismaster();
+
     // spawn a new thread to send heartbeats to the coordinator
     std::thread heartbeat(sendHeartbeat, path_and_data);
+    // spawn a new thread to track client heartbeats
+    std::thread client_heartbeat(checkClientHeartbeat);
+    
     heartbeat.join();
+    client_heartbeat.join();
   }
 }
 

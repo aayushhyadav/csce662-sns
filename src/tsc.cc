@@ -26,6 +26,12 @@ using csce662::ID;
 using csce662::ServerInfo;
 using csce662::CoordService;
 
+// stub to invoke server rpc functions
+// shared among multiple client theads
+std::unique_ptr<SNSService::Stub> stub_;
+
+bool client_connected = false;
+
 void sig_ignore(int sig) {
   std::cout << "Signal caught " + sig;
 }
@@ -41,6 +47,25 @@ Message MakeMessage(const std::string& username, const std::string& msg) {
     return m;
 }
 
+// periodically sends heartbeats to the server
+// waits until the client connects and then sends
+// heartbeats every 10 seconds
+void sendHeartbeat(std::string username, std::string hostname, std::string port) {
+  Request request;
+  Reply reply;
+
+  while (!client_connected) {
+    sleep(5);
+  }
+  
+  request.set_username(username);
+
+  while(true) {
+    ClientContext context;
+    Status status = stub_->Heartbeat(&context, request, &reply);
+    sleep(10);
+  }
+}
 
 class Client : public IClient
 {
@@ -61,10 +86,6 @@ private:
   std::string username;
   std::string port;
   
-  // You can have an instance of the client stub
-  // as a member variable.
-  std::unique_ptr<SNSService::Stub> stub_;
-
   // stub to invoke coordinator functions
   std::unique_ptr<CoordService::Stub> stub_coordinator;
   
@@ -72,7 +93,7 @@ private:
   IReply List();
   IReply Follow(const std::string &username);
   IReply UnFollow(const std::string &username);
-  void   Timeline(const std::string &username);
+  void Timeline(const std::string &username);
 };
 
 
@@ -91,7 +112,7 @@ int Client::connectTo()
     
 ///////////////////////////////////////////////////////////
 
-    //create a connection with the Coordinator
+    // create a connection with the Coordinator
     auto coordinator_channel = grpc::CreateChannel(hostname + ":" + port, grpc::InsecureChannelCredentials());
     stub_coordinator = CoordService::NewStub(coordinator_channel);
 
@@ -102,16 +123,15 @@ int Client::connectTo()
     id.set_id(std::stoi(username));
     stub_coordinator->GetServer(&client_context, id, &server_info);
 
-    //create a connection with the server
+    // create a connection with the server
     auto server_channel = grpc::CreateChannel(server_info.hostname() + ":" + server_info.port(), grpc::InsecureChannelCredentials());
     stub_ = SNSService::NewStub(server_channel);
 
     IReply ire = Login();
-
     if (ire.comm_status != SUCCESS) return -1;
 
 //////////////////////////////////////////////////////////
-
+    client_connected = true;
     return 1;
 }
 
@@ -360,8 +380,6 @@ void Client::Timeline(const std::string& username) {
     return;
 }
 
-
-
 //////////////////////////////////////////////
 // Main Function
 /////////////////////////////////////////////
@@ -389,7 +407,10 @@ int main(int argc, char** argv) {
   
   Client myc(hostname, username, port);
   
+  // spawn a thread for sending heartbeats to the server
+  std::thread heartbeat(sendHeartbeat, username, hostname, port);
   myc.run();
-  
+
+  heartbeat.join();
   return 0;
 }
