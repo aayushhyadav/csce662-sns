@@ -115,6 +115,18 @@ class CoordServiceImpl final : public CoordService::Service {
             v_mutex.unlock();
         }
 
+        // checks if the master is active
+        bool isMasterActive(int cluster_id) {
+            bool status = true;
+            for (zNode* node: clusters[cluster_id - 1]) {
+                if (node->type == "server" && node->is_master) {
+                    status = node->isActive();
+                    break;
+                }
+            }
+            return status;
+        }
+
     Status Heartbeat(ServerContext* context, const ServerInfo* serverinfo, Confirmation* confirmation) override {
         int cluster_id = serverinfo->clusterid();
         int synchronizer_count = 0;
@@ -133,6 +145,11 @@ class CoordServiceImpl final : public CoordService::Service {
 
             } else if (serverinfo->type() == "server") {
                 if (node->serverID == serverinfo->serverid()) {
+                    if (!node->is_master) {
+                        // check if the master is active
+                        // if the master is not active confirm that slave is the new master
+                        confirmation->set_ismaster(!isMasterActive(cluster_id));
+                    }
                     node->last_heartbeat = getTimeNow();
                     confirmation->set_status(true);
                     break;

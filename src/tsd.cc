@@ -91,22 +91,25 @@ struct Client {
   }
 };
 
-//Vector that stores every client that has been created
+// Vector that stores every client that has been created
 std::vector<Client*> client_db;
 
-//Vector that stores bi-directional stream corresponding to each client
+// Vector that stores bi-directional stream corresponding to each client
 std::vector<ServerReaderWriter<Message, Message>*> client_writer_streams;
 
-//stub to invoke coordinator functions
+// stub to invoke coordinator functions
 std::unique_ptr<CoordService::Stub> stub_;
 // stub to invoke slave functions
 std::unique_ptr<SNSService::Stub> slave_stub = nullptr;
 
-//directory to store user posts
+// directory to store user posts
 std::string server_file_directory;
 
-//indicates if this server is the master
+// indicates if this server is the master
 bool is_master;
+
+// indicates if slave turned into a master
+bool slave_turned_master = false;
 
 int cluster;
 std::string slave_hostname;
@@ -330,7 +333,7 @@ class SNSServiceImpl final : public SNSService::Service {
         updateFiles(server_file_directory + "/" + clientToFollow->username + "_followers.txt", loggedInClient->username);
 
         // forward the follow request to the slave server
-        if (is_master && slave_hostname.size() != 0) mirrorToSlave(2, request->username(), request->arguments(0));
+        if (is_master && !slave_turned_master && slave_hostname.size() != 0) mirrorToSlave(2, request->username(), request->arguments(0));
 
         reply->set_msg("Command completed successfully\n");
       }
@@ -400,14 +403,18 @@ class SNSServiceImpl final : public SNSService::Service {
   // RPC Login
   Status Login(ServerContext* context, const Request* request, Reply* reply) override {
 
-    if (client_db.size() > 0) {
-      for (Client* existingClient: client_db) {
-        if (existingClient->username == request->username()) {
-          if (!existingClient->missed_heartbeat) reply->set_msg("User already exists!");
-          else reply->set_msg("Successfully logged in!");
-          return Status::OK;
+    for (Client* existingClient: client_db) {
+      if (existingClient->username == request->username()) {
+        if (!existingClient->missed_heartbeat) reply->set_msg("User already exists!");
+        else {
+          reply->set_msg("Successfully logged in!");
+          if (is_master) {
+            std::cout << "Client " << existingClient->username << " reconnected" << std::endl;
+            log(INFO, "Client " + existingClient->username + " reconnected");
+          }
         }
-      } 
+        return Status::OK;
+      }
     }
 
     Client* newClient = new Client();
@@ -426,7 +433,7 @@ class SNSServiceImpl final : public SNSService::Service {
     following_file.close();
 
     // forward the login request to the slave server
-    if (is_master && slave_hostname.size() != 0) mirrorToSlave(1, newClient->username, "");
+    if (is_master && !slave_turned_master && slave_hostname.size() != 0) mirrorToSlave(1, newClient->username, "");
 
     return Status::OK;
   }
@@ -437,6 +444,7 @@ class SNSServiceImpl final : public SNSService::Service {
     Client* author = 0;
     Message message;
 
+    // only slave needs to replicate the timeline
     if (!is_master) {
       replicateTimeline(context);
       return Status::OK;
@@ -467,7 +475,7 @@ class SNSServiceImpl final : public SNSService::Service {
       }
 
       // mirror the user posts on the slave server
-      if (is_master) mirrorToSlave(3, author->username, message_string);
+      if (is_master && !slave_turned_master) mirrorToSlave(3, author->username, message_string);
     }
 
     return Status::OK;
@@ -514,7 +522,16 @@ void sendHeartbeat(PathAndData path_and_data) {
     log(INFO, "Sending heartbeat to the Coordinator");
     stub_->Heartbeat(&context1, server_info, &confirmation);
 
-    if (slave_hostname.size() == 0) {
+    // inform the slave that it is the master
+    if (!is_master && confirmation.ismaster()) {
+      is_master = true;
+      slave_turned_master = true;
+    }
+
+    // only master needs to get the slave's information
+    // moreover, if the server was previously a slave then it does not need
+    // to fetch slave's information since it is the only active server in the cluster
+    if (is_master && !slave_turned_master && slave_hostname.size() == 0) {
       ClientContext context2;
       ID id;
       ServerInfo serverinfo;
@@ -540,8 +557,10 @@ void checkClientHeartbeat() {
 
     for (Client* client: client_db) {
       if (!client->missed_heartbeat && difftime(getTimeNow(), client->last_heartbeat) > 60) {
-        log(INFO, "Client " + client->username + " disconnected");
-        std::cout << "client " << client->username << " disconnected" << std::endl;
+        if (is_master) {
+          log(INFO, "Client " + client->username + " disconnected");
+          std::cout << "client " << client->username << " disconnected" << std::endl;
+        }
         client->missed_heartbeat = true;
       }
     }
