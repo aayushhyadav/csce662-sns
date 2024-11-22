@@ -173,7 +173,7 @@ public:
         // TODO: while the number of synchronizers is harcorded as 6 right now, you need to change this
         // to use the correct number of follower synchronizers that exist overall
         // accomplish this by making a gRPC request to the coordinator asking for the list of all follower synchronizers registered with it
-        for (int i = 1; i <= 6; i++)
+        for (int i = 1; i <= total_number_of_registered_synchronizers; i++)
         {
             std::string queueName = "synch" + std::to_string(i) + "_users_queue";
             std::string message = consumeMessage(queueName, 1000); // 1 second timeout
@@ -311,7 +311,7 @@ private:
     void updateAllUsersFile(const std::vector<std::string> &users)
     {
 
-        std::string usersFile = "./cluster_" + std::to_string(clusterID) + "/" + clusterSubdirectory + "/all_users.txt";
+        std::string usersFile = "./cluster" + std::to_string(clusterID) + "/" + clusterSubdirectory + "/all_users.txt";
         std::string semName = "/" + std::to_string(clusterID) + "_" + clusterSubdirectory + "_all_users.txt";
         sem_t *fileSem = sem_open(semName.c_str(), O_CREAT);
 
@@ -320,9 +320,11 @@ private:
         {
             if (!file_contains_user(usersFile, user))
             {
+                std::cout << "Writing in all_users.txt " << user << std::endl;
                 userStream << user << std::endl;
             }
         }
+        userStream.close();
         sem_close(fileSem);
     }
 };
@@ -488,15 +490,15 @@ std::vector<std::string> get_lines_from_file(std::string filename)
     std::ifstream file;
     std::string semName = "/" + std::to_string(clusterID) + "_" + clusterSubdirectory + "_" + filename;
     sem_t *fileSem = sem_open(semName.c_str(), O_CREAT);
+
     file.open(filename);
     if (file.peek() == std::ifstream::traits_type::eof())
     {
-        // return empty vector if empty file
-        // std::cout<<"returned empty vector bc empty file"<<std::endl;
         file.close();
         sem_close(fileSem);
         return users;
     }
+    
     while (file)
     {
         getline(file, user);
@@ -526,16 +528,25 @@ void Heartbeat(std::string coordinatorIp, std::string coordinatorPort, ServerInf
     // send a heartbeat to the coordinator, which registers your follower synchronizer as either a master or a slave
     stub->Heartbeat(&context, serverInfo, &confirmation);
 
-    if (confirmation.status()) isMaster = confirmation.ismaster();
+    if (confirmation.status()) {
+        isMaster = confirmation.ismaster();
+        clusterSubdirectory = isMaster ? "1" : "2";
+
+        // create the file to synchronize users across all clusters
+        std::ofstream file("./cluster" + std::to_string(clusterID) + "/" + clusterSubdirectory + "/all_users.txt", std::ios::app);
+        if (file.is_open()) file.close();
+    }
 }
 
 bool file_contains_user(std::string filename, std::string user)
 {
     std::vector<std::string> users;
+
     // check username is valid
     std::string semName = "/" + std::to_string(clusterID) + "_" + clusterSubdirectory + "_" + filename;
     sem_t *fileSem = sem_open(semName.c_str(), O_CREAT);
     users = get_lines_from_file(filename);
+
     for (int i = 0; i < users.size(); i++)
     {
         // std::cout<<"Checking if "<<user<<" = "<<users[i]<<std::endl;
@@ -554,11 +565,10 @@ bool file_contains_user(std::string filename, std::string user)
 std::vector<std::string> get_all_users_func(int synchID)
 {
     // read all_users file master and client for correct serverID
-    // std::string master_users_file = "./master"+std::to_string(synchID)+"/all_users";
-    // std::string slave_users_file = "./slave"+std::to_string(synchID)+"/all_users";
     std::string clusterID = std::to_string(((synchID - 1) % 3) + 1);
-    std::string master_users_file = "./cluster_" + clusterID + "/1/all_users.txt";
-    std::string slave_users_file = "./cluster_" + clusterID + "/2/all_users.txt";
+    std::string master_users_file = "./cluster" + clusterID + "/1/all_users.txt";
+    std::string slave_users_file = "./cluster" + clusterID + "/2/all_users.txt";
+    
     // take longest list and package into AllUsers message
     std::vector<std::string> master_user_list = get_lines_from_file(master_users_file);
     std::vector<std::string> slave_user_list = get_lines_from_file(slave_users_file);

@@ -44,6 +44,8 @@
 #include <stdlib.h>
 #include <thread>
 #include <unistd.h>
+#include <semaphore.h>
+#include <fcntl.h>
 #include <google/protobuf/util/time_util.h>
 #include <grpc++/grpc++.h>
 #include<glog/logging.h>
@@ -233,7 +235,11 @@ class SNSServiceImpl final : public SNSService::Service {
 
     // updates the file contents with user/timeline information
     void updateFiles(std::string path, std::string contents) {
-      mtx.lock();
+      int server_id = is_master ? 1 : 2;
+
+      std::string semName = "/" + std::to_string(cluster) + "_" + std::to_string(server_id) + "_all_users.txt";
+      sem_t *fileSem = sem_open(semName.c_str(), O_CREAT);
+
       std::ofstream file(path, std::ios::app);
 
       if (file.is_open()) {
@@ -243,7 +249,8 @@ class SNSServiceImpl final : public SNSService::Service {
       } else {
         log(ERROR, "Could not open the file - " + path);
       }
-      mtx.unlock();
+
+      sem_close(fileSem);
     }
 
     // replicate the posts in the file system
@@ -273,20 +280,57 @@ class SNSServiceImpl final : public SNSService::Service {
         updateFiles(server_file_directory + "/" + follower->username + "_timeline_following.txt", post_string);
       }
     }
-  
+
+    // reads contents of the file line by line
+    std::vector<std::string> get_lines_from_file(std::string filename) {
+      int server_id = is_master ? 1 : 2;
+      std::vector<std::string> users;
+      std::string user;
+      std::ifstream file;
+      std::string semName = "/" + std::to_string(cluster) + "_" + std::to_string(server_id) + "_" + filename;
+      sem_t *fileSem = sem_open(semName.c_str(), O_CREAT);
+
+      file.open(filename);
+      if (file.peek() == std::ifstream::traits_type::eof()) {
+          file.close();
+          sem_close(fileSem);
+          return users;
+      }
+        
+      while (file) {
+        getline(file, user);
+        if (!user.empty())
+          users.push_back(user);
+      }
+
+      file.close();
+      sem_close(fileSem);
+      return users;
+    }
+      
   Status List(ServerContext* context, const Request* request, ListReply* list_reply) override {
     
     Client* logged_in_client;
+    std::vector<std::string> users;
+    std::vector<std::string> followers;
 
     for (Client* client: client_db) {
-      if (client->username == request->username()) logged_in_client = client;
-      list_reply->add_all_users(client->username);
+      if (client->username == request->username()) {
+        logged_in_client = client;
+        break;
+      }
     }
 
-    for (Client* client: logged_in_client->client_followers) {
-      list_reply->add_followers(client->username);
-    }
+    // fetch all users from the file
+    users = get_lines_from_file(server_file_directory + "/all_users.txt");
+    // fetch all followers from the file
+    followers = get_lines_from_file(server_file_directory + "/" + logged_in_client->username + "_followers.txt");
 
+    std::sort(users.begin(), users.end());
+    std::sort(followers.begin(), followers.end());
+
+    for (std::string user: users) list_reply->add_all_users(user);
+    for (std::string follower: followers) list_reply->add_followers(follower);
     return Status::OK;
   }
 
@@ -406,6 +450,8 @@ class SNSServiceImpl final : public SNSService::Service {
     for (Client* existingClient: client_db) {
       if (existingClient->username == request->username()) {
         if (!existingClient->missed_heartbeat) reply->set_msg("User already exists!");
+
+        // allowing user to login again after 60 seconds
         else {
           reply->set_msg("Successfully logged in!");
           if (is_master) {
@@ -413,6 +459,7 @@ class SNSServiceImpl final : public SNSService::Service {
             log(INFO, "Client " + existingClient->username + " reconnected");
           }
         }
+        
         return Status::OK;
       }
     }
@@ -431,6 +478,9 @@ class SNSServiceImpl final : public SNSService::Service {
     std::ofstream following_file("./" + server_file_directory + "/" + newClient->username + "_following.txt");
     follower_file.close();
     following_file.close();
+
+    // update the global users file
+    updateFiles(server_file_directory + "/all_users.txt", newClient->username);
 
     // forward the login request to the slave server
     if (is_master && !slave_turned_master && slave_hostname.size() != 0) mirrorToSlave(1, newClient->username, "");
