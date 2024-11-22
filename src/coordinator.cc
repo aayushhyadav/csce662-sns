@@ -279,6 +279,21 @@ class CoordServiceImpl final : public CoordService::Service {
         return Status::OK;
     }
 
+    // returns the list of follower synchronizers across all clusters
+    Status GetAllFollowerServers(ServerContext* context, const ID* id, ServerList* follower_servers) override {
+        for (std::vector<zNode*> cluster: clusters) {
+            for (zNode* node: cluster) {
+                if (node->type == "synchronizer") {
+                    follower_servers->add_serverid(node->serverID);
+                    follower_servers->add_hostname(node->hostname);
+                    follower_servers->add_port(node->port);
+                    follower_servers->add_type(node->type);
+                }
+            }
+        }
+        return Status::OK;
+    }
+
 };
 
 void RunServer(std::string port_no){
