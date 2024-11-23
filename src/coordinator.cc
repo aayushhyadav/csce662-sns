@@ -294,6 +294,22 @@ class CoordServiceImpl final : public CoordService::Service {
         return Status::OK;
     }
 
+    // get the follower synchronizer corresponding to the client ID
+    Status GetFollowerServer(ServerContext* context, const ID* id, ServerInfo* server_info) override {
+        zNode* selected_server = nullptr;
+        int cluster_id = ((id->id() - 1) % 3) + 1;
+
+        for (zNode* node: clusters.at(cluster_id - 1)) {
+            if (node->type == "synchronizer" && node->is_master) {
+                selected_server = node;
+                break;
+            } 
+        }
+
+        server_info->set_serverid(selected_server->serverID);
+        return Status::OK;
+    }
+
 };
 
 void RunServer(std::string port_no){

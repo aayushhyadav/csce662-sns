@@ -77,6 +77,9 @@ std::string clusterSubdirectory;
 std::vector<std::string> otherHosts;
 std::unordered_map<std::string, int> timelineLengths;
 
+// coordinator stub
+std::unique_ptr<CoordService::Stub> stub;
+
 std::vector<std::string> get_lines_from_file(std::string);
 std::vector<std::string> get_all_users_func(int);
 std::vector<std::string> get_tl_or_fl(int, int, bool);
@@ -264,15 +267,21 @@ public:
 
     // for every client in your cluster, update all their followers' timeline files
     // by publishing your user's timeline file (or just the new updates in them)
-    //  periodically to the message queue of the synchronizer responsible for that client
+    // periodically to the message queue of the synchronizer responsible for that client
     void publishTimelines()
     {
         std::vector<std::string> users = get_all_users_func(synchID);
+        Json::FastWriter writer;
 
         for (const auto &client : users)
         {
             int clientId = std::stoi(client);
             int client_cluster = ((clientId - 1) % 3) + 1;
+            int master_sync_id = 0;
+            int slave_sync_id = 0;
+
+            Json::Value timeline_json;
+
             // only do this for clients in your own cluster
             if (client_cluster != clusterID)
             {
@@ -280,13 +289,35 @@ public:
             }
 
             std::vector<std::string> timeline = get_tl_or_fl(synchID, clientId, true);
-            std::vector<std::string> followers = getFollowersOfUser(clientId);
+            std::vector<std::string> followers = get_tl_or_fl(synchID, clientId, false);
 
-            for (const auto &follower : followers)
+            // store the timeline contents in a json array
+            Json::Value timeline_content(Json::arrayValue);
+            for (const auto &content : timeline) {
+                timeline_content.append(content);
+            }
+
+            for (const auto &follower: followers)
             {
                 // send the timeline updates of your current user to all its followers
+                ClientContext context;
+                ID id;
+                ServerInfo server_info;
 
-                // YOUR CODE HERE
+                id.set_id(std::stoi(follower));
+
+                // get the follower synchronizer server for the follower
+                Status status = stub->GetFollowerServer(&context, id, &server_info);
+                master_sync_id = server_info.serverid();
+                slave_sync_id = server_info.serverid() + 3;
+
+                if (!timeline_content.empty()) {
+                    timeline_json[client] = timeline_content;
+                    std::string message = writer.write(timeline_json);
+                    if (master_sync_id != 0) publishMessage("synch" + std::to_string(master_sync_id) + "_timeline_queue", message);
+                    if (slave_sync_id != 0) publishMessage("synch" + std::to_string(slave_sync_id) + "_timeline_queue", message);
+                    std::cout << "Published Timeline to " << follower << " - " << message << std::endl;
+                }
             }
         }
     }
@@ -297,12 +328,57 @@ public:
         std::string queueName = "synch" + std::to_string(synchID) + "_timeline_queue";
         std::string message = consumeMessage(queueName, 1000); // 1 second timeout
 
+        std::vector<std::string> users = get_all_users_func(synchID);
+
+        // update the timeline length map if there are any new users
+        for (const auto &client: users) {
+            auto it = timelineLengths.find(client);
+            if (it == timelineLengths.end()) timelineLengths[client] = 0;
+        }
+
         if (!message.empty())
         {
             // consume the message from the queue and update the timeline file of the appropriate client with
             // the new updates to the timeline of the user it follows
 
-            // YOUR CODE HERE
+            std::cout << "Consumed Timeline - " << message << std::endl;
+
+            Json::Value root;
+            Json::Reader reader;
+
+            if (reader.parse(message, root)) {
+                for (const auto &client : users) {
+                    int clientId = std::stoi(client);
+                    int client_cluster = ((clientId - 1) % 3) + 1;
+
+                    // only do this for clients in your own cluster
+                    if (client_cluster != clusterID) continue;
+
+                    std::string following_timeline_file = "./cluster" + std::to_string(clusterID) + "/" + clusterSubdirectory + "/" + client + "_timeline_following.txt";
+                    std::string semName = "/" + std::to_string(clusterID) + "_" + clusterSubdirectory + "_" + client + "_timeline_following.txt";
+                    sem_t *fileSem = sem_open(semName.c_str(), O_CREAT);
+
+                    std::ofstream timelineStream(following_timeline_file, std::ios::app | std::ios::out | std::ios::in);
+
+                    // look for timeline updates from all users
+                    for (const auto &sender: users) {
+                        if (root.isMember(sender) && root[sender].size() > 1) {
+                            int timeline_size = root[sender].size();
+
+                            // update the timeline if there are new posts
+                            if (timelineLengths[sender] < timeline_size) {
+                                for (int i = timelineLengths[sender]; i < timeline_size; i++) {
+                                    timelineStream << root[sender][i].asString() << std::endl;
+                                    if ((i + 1) % 3 == 0) timelineStream << std::endl;
+                                }
+                                timelineLengths[sender] = timeline_size;
+                            }
+                        }
+                    }
+                    timelineStream.close();
+                    sem_close(fileSem);
+                }
+            }
         }
     }
 
@@ -519,7 +595,7 @@ void Heartbeat(std::string coordinatorIp, std::string coordinatorPort, ServerInf
 
     log(INFO, "Sending initial heartbeat to coordinator");
     std::string coordinatorInfo = coordinatorIp + ":" + coordinatorPort;
-    std::unique_ptr<CoordService::Stub> stub = std::unique_ptr<CoordService::Stub>(CoordService::NewStub(grpc::CreateChannel(coordinatorInfo, grpc::InsecureChannelCredentials())));
+    stub = std::unique_ptr<CoordService::Stub>(CoordService::NewStub(grpc::CreateChannel(coordinatorInfo, grpc::InsecureChannelCredentials())));
 
     ClientContext context;
     Confirmation confirmation;
@@ -582,8 +658,8 @@ std::vector<std::string> get_tl_or_fl(int synchID, int clientID, bool tl)
 {
     // std::string master_fn = "./master"+std::to_string(synchID)+"/"+std::to_string(clientID);
     // std::string slave_fn = "./slave"+std::to_string(synchID)+"/" + std::to_string(clientID);
-    std::string master_fn = "cluster_" + std::to_string(clusterID) + "/1/" + std::to_string(clientID);
-    std::string slave_fn = "cluster_" + std::to_string(clusterID) + "/2/" + std::to_string(clientID);
+    std::string master_fn = "cluster" + std::to_string(clusterID) + "/1/" + std::to_string(clientID);
+    std::string slave_fn = "cluster" + std::to_string(clusterID) + "/2/" + std::to_string(clientID);
     if (tl)
     {
         master_fn.append("_timeline.txt");

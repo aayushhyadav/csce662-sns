@@ -144,17 +144,27 @@ class SNSServiceImpl final : public SNSService::Service {
     }
 
     // writes the file contents specified by filename into the stream 
-    void writeFileContentsToStream(std::string filename, ServerReaderWriter<Message, Message>* stream) {
+    void writeFileContentsToStream(std::string filename, ServerReaderWriter<Message, Message>* stream, std::string author) {
       std::ifstream following_file;
       std::string cur_line;
       std::vector<std::string> tokens;
       Message message;
+
+      int server_id = is_master ? 1 : 2;
+      std::string semName = "/" + std::to_string(cluster) + "_" + std::to_string(server_id) + "_" + author + "_timeline_following.txt";
+      sem_t *fileSem = sem_open(semName.c_str(), O_CREAT);
 
       following_file.open(filename);
 
       if (following_file.is_open()) {
         while (getline(following_file, cur_line)) {
           tokens.push_back(cur_line + "\n");
+        }
+
+        // file is empty
+        if (tokens.size() == 0) {
+          sem_close(fileSem);
+          return;
         }
 
         auto token = tokens.rbegin() + 1;
@@ -189,6 +199,8 @@ class SNSServiceImpl final : public SNSService::Service {
         if (count < 20) stream->Write(message);
         following_file.close();
       }
+      
+      sem_close(fileSem);
     }
 
     // mirror the requests to the slave server
@@ -516,8 +528,8 @@ class SNSServiceImpl final : public SNSService::Service {
     }
     mtx.unlock();
 
-    writeFileContentsToStream(server_file_directory + "/" + author->username + "_timeline_following.txt", stream);
-
+    writeFileContentsToStream(server_file_directory + "/" + author->username + "_timeline_following.txt", stream, author->username);
+    
     while (stream->Read(&message)) {
       std::string message_string = getMessageAsString(message);
       updateFiles(server_file_directory + "/" + author->username + "_timeline.txt", message_string, "_timeline.txt", author->username);
