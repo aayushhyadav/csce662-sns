@@ -234,10 +234,13 @@ class SNSServiceImpl final : public SNSService::Service {
     }
 
     // updates the file contents with user/timeline information
-    void updateFiles(std::string path, std::string contents) {
+    void updateFiles(std::string path, std::string contents, std::string file_type, std::string author) {
       int server_id = is_master ? 1 : 2;
+      std::string semName;
 
-      std::string semName = "/" + std::to_string(cluster) + "_" + std::to_string(server_id) + "_all_users.txt";
+      if (author.size() == 0) semName = "/" + std::to_string(cluster) + "_" + std::to_string(server_id) + file_type;
+      else semName = "/" + std::to_string(cluster) + "_" + std::to_string(server_id) + "_" + author + file_type;
+
       sem_t *fileSem = sem_open(semName.c_str(), O_CREAT);
 
       std::ofstream file(path, std::ios::app);
@@ -267,7 +270,7 @@ class SNSServiceImpl final : public SNSService::Service {
       std::replace(post_string.begin(), post_string.end(), ',', ' ');
       std::replace(post_string.begin(), post_string.end(), ';', '\n');
 
-      updateFiles(server_file_directory + "/" + username_string + "_timeline.txt", post_string);
+      updateFiles(server_file_directory + "/" + username_string + "_timeline.txt", post_string, "_timeline.txt", username_string);
 
       for (Client* client: client_db) {
         if (username_string == client->username) {
@@ -277,7 +280,7 @@ class SNSServiceImpl final : public SNSService::Service {
       }
       
       for (Client* follower: author->client_followers) {
-        updateFiles(server_file_directory + "/" + follower->username + "_timeline_following.txt", post_string);
+        updateFiles(server_file_directory + "/" + follower->username + "_timeline_following.txt", post_string, "_timeline_following.txt", follower->username);
       }
     }
 
@@ -353,16 +356,13 @@ class SNSServiceImpl final : public SNSService::Service {
       }
     }
 
-    if (clientToFollow == nullptr) {
-      reply->set_msg("Command failed with invalid username\n");
-      
-    } else if (clientToFollow == loggedInClient) {
+    if (clientToFollow == loggedInClient) {
       reply->set_msg("Input username already exists, command failed\n");
 
     } else {
       for (Client* client: loggedInClient->client_following) {
         // client cannot follow the same person again
-        if (client->username == clientToFollow->username) {
+        if (clientToFollow != nullptr && client->username == clientToFollow->username) {
           can_follow = false;
           reply->set_msg("Input username already exists, command failed\n");
           break;
@@ -370,11 +370,14 @@ class SNSServiceImpl final : public SNSService::Service {
       }
 
       if (can_follow) {
-        loggedInClient->client_following.push_back(clientToFollow);
-        clientToFollow->client_followers.push_back(loggedInClient);
+        updateFiles(server_file_directory + "/" + loggedInClient->username + "_following.txt", request->arguments(0), "_following.txt", loggedInClient->username);
 
-        updateFiles(server_file_directory + "/" + loggedInClient->username + "_following.txt", clientToFollow->username);
-        updateFiles(server_file_directory + "/" + clientToFollow->username + "_followers.txt", loggedInClient->username);
+        // if client to follow resides on the same cluster
+        if (clientToFollow != nullptr) {
+          loggedInClient->client_following.push_back(clientToFollow);
+          clientToFollow->client_followers.push_back(loggedInClient);
+          updateFiles(server_file_directory + "/" + clientToFollow->username + "_followers.txt", loggedInClient->username, "_followers.txt", clientToFollow->username);
+        }
 
         // forward the follow request to the slave server
         if (is_master && !slave_turned_master && slave_hostname.size() != 0) mirrorToSlave(2, request->username(), request->arguments(0));
@@ -480,7 +483,7 @@ class SNSServiceImpl final : public SNSService::Service {
     following_file.close();
 
     // update the global users file
-    updateFiles(server_file_directory + "/all_users.txt", newClient->username);
+    updateFiles(server_file_directory + "/all_users.txt", newClient->username, "_all_users.txt", "");
 
     // forward the login request to the slave server
     if (is_master && !slave_turned_master && slave_hostname.size() != 0) mirrorToSlave(1, newClient->username, "");
@@ -517,11 +520,11 @@ class SNSServiceImpl final : public SNSService::Service {
 
     while (stream->Read(&message)) {
       std::string message_string = getMessageAsString(message);
-      updateFiles(server_file_directory + "/" + author->username + "_timeline.txt", message_string);
+      updateFiles(server_file_directory + "/" + author->username + "_timeline.txt", message_string, "_timeline.txt", author->username);
 
       for (Client* follower: author->client_followers) {
         if (follower->stream != 0) follower->stream->Write(message);
-        updateFiles(server_file_directory + "/" + follower->username + "_timeline_following.txt", message_string);
+        updateFiles(server_file_directory + "/" + follower->username + "_timeline_following.txt", message_string, "_timeline_following.txt", follower->username);
       }
 
       // mirror the user posts on the slave server

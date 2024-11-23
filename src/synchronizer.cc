@@ -168,7 +168,6 @@ public:
     void consumeUserLists()
     {
         std::vector<std::string> allUsers;
-        // YOUR CODE HERE
 
         // TODO: while the number of synchronizers is harcorded as 6 right now, you need to change this
         // to use the correct number of follower synchronizers that exist overall
@@ -227,7 +226,7 @@ public:
         // YOUR CODE HERE
 
         // TODO: hardcoding 6 here, but you need to get list of all synchronizers from coordinator as before
-        for (int i = 1; i <= 6; i++)
+        for (int i = 1; i <= total_number_of_registered_synchronizers; i++)
         {
 
             std::string queueName = "synch" + std::to_string(i) + "_clients_relations_queue";
@@ -241,7 +240,7 @@ public:
                 {
                     for (const auto &client : allUsers)
                     {
-                        std::string followerFile = "./cluster_" + std::to_string(clusterID) + "/" + clusterSubdirectory + "/" + client + "_followers.txt";
+                        std::string followerFile = "./cluster" + std::to_string(clusterID) + "/" + clusterSubdirectory + "/" + client + "_followers.txt";
                         std::string semName = "/" + std::to_string(clusterID) + "_" + clusterSubdirectory + "_" + client + "_followers.txt";
                         sem_t *fileSem = sem_open(semName.c_str(), O_CREAT);
 
@@ -617,8 +616,8 @@ std::vector<std::string> getFollowersOfUser(int ID)
 
     for (auto userID : usersInCluster)
     { // Examine each user's following file
-        std::string file = "cluster_" + std::to_string(clusterID) + "/" + clusterSubdirectory + "/" + userID + "_follow_list.txt";
-        std::string semName = "/" + std::to_string(clusterID) + "_" + clusterSubdirectory + "_" + userID + "_follow_list.txt";
+        std::string file = "cluster" + std::to_string(clusterID) + "/" + clusterSubdirectory + "/" + userID + "_following.txt";
+        std::string semName = "/" + std::to_string(clusterID) + "_" + clusterSubdirectory + "_" + userID + "_following.txt";
         sem_t *fileSem = sem_open(semName.c_str(), O_CREAT);
         // std::cout << "Reading file " << file << std::endl;
         if (file_contains_user(file, clientID))
