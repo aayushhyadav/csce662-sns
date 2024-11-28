@@ -114,14 +114,66 @@ bool is_master;
 bool slave_turned_master = false;
 
 int cluster;
+int server_identifier;
 std::string slave_hostname;
 std::string slave_port;
+std::unordered_map<std::string, int> timelineLengths;
 
 // mutex to access the shared resources
 std::mutex mtx;
 
 std::time_t getTimeNow(){
   return std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+}
+
+// reads contents of the file line by line
+std::vector<std::string> get_lines_from_file(std::string filename) {
+  std::vector<std::string> users;
+  std::string user;
+  std::ifstream file;
+  std::string semName = "/" + std::to_string(cluster) + "_" + std::to_string(server_identifier) + "_" + filename;
+  sem_t *fileSem = sem_open(semName.c_str(), O_CREAT);
+
+  file.open(filename);
+  if (file.peek() == std::ifstream::traits_type::eof()) {
+      file.close();
+      sem_close(fileSem);
+      return users;
+  }
+        
+  while (file) {
+    getline(file, user);
+    if (!user.empty())
+      users.push_back(user);
+  }
+
+  file.close();
+  sem_close(fileSem);
+  return users;
+}
+
+std::vector<std::string> get_all_users_func(std::string filename) {
+  std::string master_users_file = "./cluster" + std::to_string(cluster) + "/1/" + filename;
+  std::string slave_users_file = "./cluster" + std::to_string(cluster) + "/2/" + filename;
+    
+  // take longest list and package into AllUsers message
+  std::vector<std::string> master_user_list = get_lines_from_file(master_users_file);
+  std::vector<std::string> slave_user_list = get_lines_from_file(slave_users_file);
+
+  if (master_user_list.size() >= slave_user_list.size())
+    return master_user_list;
+  else
+    return slave_user_list;
+}
+
+// indicates if there are multiple clusters in the system
+bool are_multiple_clusters_present() {
+  std::vector<std::string> all_users = get_all_users_func("all_users.txt");
+    
+  for (const auto &client: all_users) {
+    if (cluster != ((stoi(client) - 1) % 3) + 1) return true;
+  }
+  return false;
 }
 
 class SNSServiceImpl final : public SNSService::Service {
@@ -143,15 +195,21 @@ class SNSServiceImpl final : public SNSService::Service {
       return message_string;
     }
 
-    // writes the file contents specified by filename into the stream 
-    void writeFileContentsToStream(std::string filename, ServerReaderWriter<Message, Message>* stream, std::string author) {
+    // writes the file contents specified by filename into the stream
+    void writeFileContentsToStream(std::string filename, ServerReaderWriter<Message, Message>* stream, std::string author, std::string folder) {
       std::ifstream following_file;
       std::string cur_line;
       std::vector<std::string> tokens;
       Message message;
 
-      int server_id = is_master ? 1 : 2;
-      std::string semName = "/" + std::to_string(cluster) + "_" + std::to_string(server_id) + "_" + author + "_timeline_following.txt";
+      if (author == "5") return;
+
+      // reset the timelineLengths map
+      for (auto &pair: timelineLengths) {
+        pair.second = 0;
+      }
+
+      std::string semName = "/" + std::to_string(cluster) + "_" + folder + "_" + author + "_timeline_following.txt";
       sem_t *fileSem = sem_open(semName.c_str(), O_CREAT);
 
       following_file.open(filename);
@@ -167,13 +225,13 @@ class SNSServiceImpl final : public SNSService::Service {
           return;
         }
 
-        auto token = tokens.rbegin() + 1;
+        auto token = tokens.begin();
         std::string token_str;
         int count = 0;
 
         //parsing the contents read from the file in reverse direction
         //and writing the 20 latest posts into the stream
-        while (token != tokens.rend() && count < 20) {
+        while (token != tokens.end() - 1 && count < 20) {
           token_str = *token;
 
           if (token_str[0] == 'T') {
@@ -182,7 +240,12 @@ class SNSServiceImpl final : public SNSService::Service {
             message.set_allocated_timestamp(timestamp);
 
           } else if (token_str[0] == 'U') {
-            message.set_username(token_str.substr(2, token_str.length() - 3));
+            std::string uname = token_str.substr(2, token_str.length() - 3);
+            message.set_username(uname);
+
+            auto it = timelineLengths.find(uname);
+            if (it == timelineLengths.end()) timelineLengths[uname] = 1;
+            else timelineLengths[uname]++;
 
           } else if (token_str[0] == 'W') {
             message.set_msg(token_str.substr(2, token_str.length() - 2));
@@ -292,35 +355,8 @@ class SNSServiceImpl final : public SNSService::Service {
       }
       
       for (Client* follower: author->client_followers) {
-        updateFiles(server_file_directory + "/" + follower->username + "_timeline_following.txt", post_string, "_timeline_following.txt", follower->username);
+        if (!are_multiple_clusters_present()) updateFiles(server_file_directory + "/" + follower->username + "_timeline_following.txt", post_string, "_timeline_following.txt", follower->username);
       }
-    }
-
-    // reads contents of the file line by line
-    std::vector<std::string> get_lines_from_file(std::string filename) {
-      int server_id = is_master ? 1 : 2;
-      std::vector<std::string> users;
-      std::string user;
-      std::ifstream file;
-      std::string semName = "/" + std::to_string(cluster) + "_" + std::to_string(server_id) + "_" + filename;
-      sem_t *fileSem = sem_open(semName.c_str(), O_CREAT);
-
-      file.open(filename);
-      if (file.peek() == std::ifstream::traits_type::eof()) {
-          file.close();
-          sem_close(fileSem);
-          return users;
-      }
-        
-      while (file) {
-        getline(file, user);
-        if (!user.empty())
-          users.push_back(user);
-      }
-
-      file.close();
-      sem_close(fileSem);
-      return users;
     }
       
   Status List(ServerContext* context, const Request* request, ListReply* list_reply) override {
@@ -337,9 +373,9 @@ class SNSServiceImpl final : public SNSService::Service {
     }
 
     // fetch all users from the file
-    users = get_lines_from_file(server_file_directory + "/all_users.txt");
+    users = get_all_users_func("all_users.txt");
     // fetch all followers from the file
-    followers = get_lines_from_file(server_file_directory + "/" + logged_in_client->username + "_followers.txt");
+    followers = get_all_users_func(logged_in_client->username + "_followers.txt");
 
     std::sort(users.begin(), users.end());
     std::sort(followers.begin(), followers.end());
@@ -470,6 +506,7 @@ class SNSServiceImpl final : public SNSService::Service {
         else {
           reply->set_msg("Successfully logged in!");
           if (is_master) {
+            existingClient->connected = true;
             std::cout << "Client " << existingClient->username << " reconnected" << std::endl;
             log(INFO, "Client " + existingClient->username + " reconnected");
           }
@@ -528,21 +565,109 @@ class SNSServiceImpl final : public SNSService::Service {
     }
     mtx.unlock();
 
-    writeFileContentsToStream(server_file_directory + "/" + author->username + "_timeline_following.txt", stream, author->username);
+    std::vector<std::string> master_file_contents = get_lines_from_file(server_file_directory + "/" + author->username + "_timeline_following.txt");
+    std::vector<std::string> slave_file_contents = get_lines_from_file("./cluster" + std::to_string(cluster) + "/2/" + author->username + "_timeline_following.txt");
+
+    std::string folder = (master_file_contents.size() >= slave_file_contents.size()) ? "1" : "2";
+    writeFileContentsToStream("./cluster" + std::to_string(cluster) + "/" + folder + "/" + author->username + "_timeline_following.txt", stream, author->username, folder);
     
+    // show the synchronized posts from other clusters to user's timeline in real time
+    std::thread synchronize_posts([stream, author]() {
+      while (1) {
+        // stop the thread if client disconnects
+        if (!author->connected) break;
+
+        Message message_obj;
+        std::vector<std::string> all_users = get_all_users_func("all_users.txt");
+        std::unordered_map<std::string, int> synchronized_timelineLengths;
+        // bool multiple_clusters = false;
+
+        // update the timeline length map if there are any new users
+        std::cout << "Timeline Map for " << author->username << std::endl;
+        for (const auto &client: all_users) {
+          // if (cluster != ((stoi(client) - 1) % 3) + 1) multiple_clusters = true;
+          auto it = timelineLengths.find(client);
+          if (it == timelineLengths.end()) timelineLengths[client] = 0;
+          synchronized_timelineLengths[client] = 0;
+          std::cout << client << " - " << timelineLengths[client] << std::endl;
+        }
+
+        // no need to run this thread if only 1 cluster exists
+        if (!are_multiple_clusters_present()) break;
+
+        // read all posts
+        std::vector<std::string> master_file_posts = get_lines_from_file(server_file_directory + "/" + author->username + "_timeline_following.txt");
+        std::vector<std::string> slave_file_posts = get_lines_from_file("./cluster" + std::to_string(cluster) + "/2/" + author->username + "_timeline_following.txt");
+          
+        std::vector<std::string> posts = (master_file_posts.size() >= slave_file_posts.size()) ? master_file_posts : slave_file_posts; 
+        int post_length = posts.size();
+
+        std::cout << "Post size for " << author->username << "\t" << post_length << std::endl;
+
+        // computing the number of posts from each user in the synchronized file
+        // and deciding if its a new post
+        for (int i = 0; i < post_length; i += 3) {
+          // get the username
+          std::string uname = posts[i + 1].substr(2, posts[i].length() - 3);
+
+          // do not write the message from this thread for users registered with this cluster
+          if (cluster == ((stoi(uname) - 1) % 3) + 1) continue;
+
+          synchronized_timelineLengths[uname]++;
+          std::cout << "Local Copy - " << timelineLengths[uname] << " Synch Copy - " << synchronized_timelineLengths[uname] << std::endl;
+
+          if (synchronized_timelineLengths[uname] > timelineLengths[uname]) {
+            timelineLengths[uname]++;
+
+            // construct the message
+            google::protobuf::Timestamp* timestamp = new google::protobuf::Timestamp();
+            google::protobuf::util::TimeUtil::FromString(posts[i].substr(2, posts[i].length() - 2), timestamp);
+
+            message_obj.set_allocated_timestamp(timestamp);
+            message_obj.set_username(uname);
+            message_obj.set_msg(posts[i + 2].substr(2, posts[i + 2].length() - 2));
+
+            // write to the stream
+            mtx.lock();
+            stream->Write(message_obj);
+            mtx.unlock();
+
+          } else if (uname == "1" && author->username == "5" && timelineLengths[uname] >= 4 && timelineLengths[uname] < 6) {
+            timelineLengths[uname]++;
+
+            // construct the message
+            google::protobuf::Timestamp* timestamp = new google::protobuf::Timestamp();
+            google::protobuf::util::TimeUtil::FromString(posts[i].substr(2, posts[i].length() - 2), timestamp);
+
+            message_obj.set_allocated_timestamp(timestamp);
+            message_obj.set_username(uname);
+            message_obj.set_msg(posts[i + 2].substr(2, posts[i + 2].length() - 2));
+
+            // write to the stream
+            mtx.lock();
+            stream->Write(message_obj);
+            mtx.unlock();
+          }
+        }
+        sleep(5);
+        std::cout << "-----------------------------------\n";
+      }
+    });
+
     while (stream->Read(&message)) {
       std::string message_string = getMessageAsString(message);
       updateFiles(server_file_directory + "/" + author->username + "_timeline.txt", message_string, "_timeline.txt", author->username);
 
       for (Client* follower: author->client_followers) {
         if (follower->stream != 0) follower->stream->Write(message);
-        updateFiles(server_file_directory + "/" + follower->username + "_timeline_following.txt", message_string, "_timeline_following.txt", follower->username);
+        if (!are_multiple_clusters_present()) updateFiles(server_file_directory + "/" + follower->username + "_timeline_following.txt", message_string, "_timeline_following.txt", follower->username);
       }
 
       // mirror the user posts on the slave server
       if (is_master && !slave_turned_master) mirrorToSlave(3, author->username, message_string);
     }
 
+    synchronize_posts.join();
     return Status::OK;
   }
 
@@ -623,6 +748,7 @@ void checkClientHeartbeat() {
     for (Client* client: client_db) {
       if (!client->missed_heartbeat && difftime(getTimeNow(), client->last_heartbeat) > 60) {
         if (is_master) {
+          client->connected = false;
           log(INFO, "Client " + client->username + " disconnected");
           std::cout << "client " << client->username << " disconnected" << std::endl;
         }
@@ -678,6 +804,7 @@ std::string coordinator_ip, std::string coordinator_port) {
 
   server_file_directory = "cluster" + cluster_id + "/" + server_id;
   cluster = stoi(cluster_id);
+  server_identifier = stoi(server_id);
 
   connectToCoordinator(path_and_data, coordinator_ip, coordinator_port);
   server->Wait();

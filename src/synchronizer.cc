@@ -77,6 +77,9 @@ std::string clusterSubdirectory;
 std::vector<std::string> otherHosts;
 std::unordered_map<std::string, int> timelineLengths;
 
+// mutex to access the shared resources
+std::mutex mtx;
+
 // coordinator stub
 std::unique_ptr<CoordService::Stub> stub;
 
@@ -187,7 +190,7 @@ public:
                 {
                     for (const auto &user : root["users"])
                     {
-                        allUsers.push_back(user.asString());
+                        if (user.asString().size() == 1) allUsers.push_back(user.asString());
                     }
                 }
             }
@@ -252,7 +255,7 @@ public:
                         {
                             for (const auto &follower : root[client])
                             {
-                                if (!file_contains_user(followerFile, follower.asString()))
+                                if (follower.asString().size() == 1 && !file_contains_user(followerFile, follower.asString()))
                                 {
                                     followerStream << follower.asString() << std::endl;
                                 }
@@ -272,6 +275,7 @@ public:
     {
         std::vector<std::string> users = get_all_users_func(synchID);
         Json::FastWriter writer;
+        std::string message;
 
         for (const auto &client : users)
         {
@@ -297,6 +301,17 @@ public:
                 timeline_content.append(content);
             }
 
+            // send the post to yourself for book keeping
+            if (!timeline_content.empty()) {
+                timeline_json[client] = timeline_content;
+                message = writer.write(timeline_json);
+                master_sync_id = synchID;
+                slave_sync_id = synchID + 3;
+                publishMessage("synch" + std::to_string(master_sync_id) + "_timeline_queue", message);
+                publishMessage("synch" + std::to_string(slave_sync_id) + "_timeline_queue", message);
+                std::cout << "Published Timeline to " << client << " - " << message << std::endl;
+            }
+
             for (const auto &follower: followers)
             {
                 // send the timeline updates of your current user to all its followers
@@ -311,12 +326,12 @@ public:
                 master_sync_id = server_info.serverid();
                 slave_sync_id = server_info.serverid() + 3;
 
+                // inform all followers
                 if (!timeline_content.empty()) {
                     timeline_json[client] = timeline_content;
-                    std::string message = writer.write(timeline_json);
+                    message = writer.write(timeline_json);
                     if (master_sync_id != 0) publishMessage("synch" + std::to_string(master_sync_id) + "_timeline_queue", message);
                     if (slave_sync_id != 0) publishMessage("synch" + std::to_string(slave_sync_id) + "_timeline_queue", message);
-                    std::cout << "Published Timeline to " << follower << " - " << message << std::endl;
                 }
             }
         }
@@ -331,20 +346,24 @@ public:
         std::vector<std::string> users = get_all_users_func(synchID);
 
         // update the timeline length map if there are any new users
+        std::cout << "Timeline Map" << std::endl;
         for (const auto &client: users) {
             auto it = timelineLengths.find(client);
             if (it == timelineLengths.end()) timelineLengths[client] = 0;
+            std::cout << client << " - " << timelineLengths[client] << std::endl;
         }
 
         if (!message.empty())
         {
             // consume the message from the queue and update the timeline file of the appropriate client with
             // the new updates to the timeline of the user it follows
-
+            
             std::cout << "Consumed Timeline - " << message << std::endl;
-
+            
             Json::Value root;
             Json::Reader reader;
+            std::string sender_username = ""; // sender of the message (could be any user)
+            int sender_timeline_size = 0; // total number of posts sent by the sender
 
             if (reader.parse(message, root)) {
                 for (const auto &client : users) {
@@ -360,25 +379,34 @@ public:
 
                     std::ofstream timelineStream(following_timeline_file, std::ios::app | std::ios::out | std::ios::in);
 
-                    // look for timeline updates from all users
+                    // look for timeline updates from the sender
                     for (const auto &sender: users) {
                         if (root.isMember(sender) && root[sender].size() > 1) {
-                            int timeline_size = root[sender].size();
+                            sender_timeline_size = root[sender].size();
+                            sender_username = sender;
 
-                            // update the timeline if there are new posts
-                            if (timelineLengths[sender] < timeline_size) {
-                                for (int i = timelineLengths[sender]; i < timeline_size; i++) {
-                                    timelineStream << root[sender][i].asString() << std::endl;
+                            std::cout << "Sender " << sender_username << " synchronized timeline length - " << sender_timeline_size << std::endl;
+ 
+                            // update the timeline file of the client if there are new posts
+                            if (timelineLengths[sender] < sender_timeline_size && sender != client) {
+                                for (int i = timelineLengths[sender]; i < sender_timeline_size; i++) {
+                                    if (root[sender][i].asString().size() > 1) timelineStream << root[sender][i].asString() << std::endl;
                                     if ((i + 1) % 3 == 0) timelineStream << std::endl;
                                 }
-                                timelineLengths[sender] = timeline_size;
                             }
+                            // this conditions is met only once in every iteration
+                            break;
                         }
                     }
                     timelineStream.close();
                     sem_close(fileSem);
                 }
+                
+                // update the local copy of synchronized posts from the sender
+                if (sender_username.size() != 0 && timelineLengths[sender_username] < sender_timeline_size)
+                    timelineLengths[sender_username] = sender_timeline_size;
             }
+            std::cout << "---------------------------------\n";
         }
     }
 
@@ -395,7 +423,6 @@ private:
         {
             if (!file_contains_user(usersFile, user))
             {
-                std::cout << "Writing in all_users.txt " << user << std::endl;
                 userStream << user << std::endl;
             }
         }
@@ -438,10 +465,12 @@ void RunServer(std::string coordIP, std::string coordPort, std::string port_no, 
     std::thread consumerThread([&rabbitMQ]()
                                {
         while (true) {
+            mtx.lock();
             rabbitMQ.consumeUserLists();
             rabbitMQ.consumeClientRelations();
             rabbitMQ.consumeTimelines();
-            std::this_thread::sleep_for(std::chrono::seconds(5));
+            mtx.unlock();
+            std::this_thread::sleep_for(std::chrono::seconds(2));
             // you can modify this sleep period as per your choice
         } });
 
@@ -516,7 +545,7 @@ void run_synchronizer(std::string coordIP, std::string coordPort, std::string po
     while (true)
     {
         // the synchronizers sync files every 5 seconds
-        sleep(5);
+        sleep(3);
 
         grpc::ClientContext context;
         ServerList followerServers;
@@ -546,6 +575,7 @@ void run_synchronizer(std::string coordIP, std::string coordPort, std::string po
         // below here, you run all the update functions that synchronize the state across all the clusters
         // make any modifications as necessary to satisfy the assignments requirements
 
+        mtx.lock();
         // Publish user list
         rabbitMQ.publishUserList();
 
@@ -554,6 +584,7 @@ void run_synchronizer(std::string coordIP, std::string coordPort, std::string po
 
         // Publish timelines
         rabbitMQ.publishTimelines();
+        mtx.unlock();
     }
     return;
 }
